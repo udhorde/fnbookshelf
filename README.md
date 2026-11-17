@@ -59,19 +59,6 @@ PORT=8096 DATA_DIR=/path/to/data ADMIN_EMAIL=you@example.com \
 
 默认启用自签名 HTTPS，`curl` 需加 `-k`。首次启动会自动创建管理员账号，数据全部落在 `DATA_DIR` 下（`data.json` + `secret.key` + `logs/`）。
 
-## 关于这个仓库的内容
-
-`.gitignore` 刻意排除了以下内容，克隆后需要自行准备：
-
-| 排除项 | 原因 |
-|---|---|
-| `fnbookshelf/*.fpk` | 每个 43~63MB 的构建产物，可从源码重新打包 |
-| `fnbookshelf/appsrc/node-runtime/` | 52MB 的 Node 运行时二进制，打包时从系统复制 |
-| `android/tools/` | 1.2GB 工具链（JDK / build-tools / platform） |
-| `android/keystore/` | APK 签名私钥，泄漏等于别人能以你的名义发版 |
-| `fnbookshelf/data/` | 运行时数据与 `secret.key`（令牌签名密钥） |
-| `testlib/` | 测试用电子书样本，可用 `mkpdf.js` / `mkepub.js` / `mkppt.js` 重新生成 |
-
 ## 版本
 
 | 版本 | 主要改动 |

@@ -1,0 +1,17 @@
+#!/bin/bash
+# 配置变更后：应用新配置并重启（1.6.0 起使用系统注入的配置目录）
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ETC_DIR="${TRIM_PKGETC:-$APP_ROOT/etc}"
+
+if [ -n "${wizard_port:-}" ]; then
+  if [ -f "$ETC_DIR/config.env" ]; then
+    sed -i "s/^APP_PORT=.*/APP_PORT=$wizard_port/" "$ETC_DIR/config.env" 2>/dev/null
+  else
+    echo "APP_PORT=$wizard_port" > "$ETC_DIR/config.env" 2>/dev/null
+  fi
+fi
+
+"$APP_ROOT/cmd/main" stop >/dev/null 2>&1
+sleep 1
+"$APP_ROOT/cmd/main" start
+exit $?

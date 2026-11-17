@@ -1,0 +1,45 @@
+#!/bin/bash
+# 配置变更前：停止进程（改端口/权限前必须先退干净，否则新端口起不来、旧端口还被占着）
+# 1.8.2.1：与 cmd/main stop 同一套逻辑——SIGTERM 等最多 20 秒，仍在则 SIGKILL，最后清 PID 文件。
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VAR_DIR="${TRIM_PKGVAR:-$APP_ROOT/var}"
+PID_FILE="$VAR_DIR/app.pid"
+APP_JS="$APP_ROOT/target/server/app.js"
+
+app_pids() {
+  local d pid cl
+  for d in /proc/[0-9]*; do
+    [ -r "$d/cmdline" ] || continue
+    pid="${d#/proc/}"
+    [ "$pid" = "$$" ] && continue
+    cl="$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)"
+    case "$cl" in
+      *"$APP_JS"*) echo "$pid" ;;
+      *fnbookshelf*/target/server/app.js*) echo "$pid" ;;
+    esac
+  done
+}
+
+PIDS="$(app_pids)"
+if [ -f "$PID_FILE" ]; then
+  PIDS="$(printf '%s\n%s\n' "$PIDS" "$(cat "$PID_FILE" 2>/dev/null | tr -d '\r\n ')")"
+fi
+PIDS="$(printf '%s\n' "$PIDS" | sort -u | grep -E '^[0-9]+$')"
+
+if [ -n "$PIDS" ]; then
+  for p in $PIDS; do kill "$p" 2>/dev/null; done
+  waited=0
+  while [ "$waited" -lt 40 ]; do
+    [ -z "$(app_pids)" ] && break
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  LEFT="$(app_pids)"
+  if [ -n "$LEFT" ]; then
+    for p in $LEFT; do kill -9 "$p" 2>/dev/null; done
+    sleep 1
+  fi
+fi
+
+rm -f "$PID_FILE"
+exit 0

@@ -1,0 +1,4 @@
+#!/bin/bash
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+chmod -R +x "$APP_ROOT/target/node/bin" 2>/dev/null
+exit 0

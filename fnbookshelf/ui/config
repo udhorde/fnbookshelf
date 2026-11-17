@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "fnbookshelf.Application": {
+      "title": "飞牛书屋",
+      "icon": "images/icon_{0}.png",
+      "type": "url",
+      "protocol": "https",
+      "port": "${wizard_port}",
+      "url": "/",
+      "allUsers": true
+    }
+  }
+}

@@ -1,0 +1,36 @@
+[
+  {
+    "stepTitle": "欢迎使用飞牛书屋",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "飞牛书屋是一款自托管电子书阅读应用。它只关联读取您指定的 NAS 目录，不搬运、不重命名任何图书文件。安装完成后，请在「管理后台」中配置发件邮箱（SMTP）以启用邮箱验证码登录。"
+      }
+    ]
+  },
+  {
+    "stepTitle": "基本设置",
+    "items": [
+      {
+        "type": "text",
+        "field": "wizard_port",
+        "label": "访问端口",
+        "initValue": "8096",
+        "rules": [
+          { "required": true, "message": "请输入端口号" },
+          { "pattern": "^[0-9]+$", "message": "端口号必须是数字" }
+        ]
+      },
+      {
+        "type": "text",
+        "field": "wizard_admin_email",
+        "label": "管理员邮箱",
+        "helpText": "首个管理员账号。安装后使用该邮箱收取验证码即可登录。",
+        "rules": [
+          { "required": true, "message": "请输入管理员邮箱" },
+          { "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", "message": "邮箱格式不正确" }
+        ]
+      }
+    ]
+  }
+]

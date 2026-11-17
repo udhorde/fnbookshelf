@@ -1,0 +1,49 @@
+#!/bin/bash
+# 升级前：停止旧进程（数据在 var/ 与 etc/，升级不丢失）
+# 1.8.2.1：以前只发 SIGTERM 再 sleep 1 就走人——大书库退出时要写几十 MB 的 data.json，
+# 1 秒根本不够。旧进程没退干净 + PID 文件还在，升级后 cmd/main start 会误判「已在运行」
+# 而直接返回，表现为「升级完应用打不开」。这里改为等它真正退出，必要时 SIGKILL，
+# 最后一定要清掉 PID 文件。
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VAR_DIR="${TRIM_PKGVAR:-$APP_ROOT/var}"
+PID_FILE="$VAR_DIR/app.pid"
+APP_JS="$APP_ROOT/target/server/app.js"
+
+app_pids() {
+  local d pid cl
+  for d in /proc/[0-9]*; do
+    [ -r "$d/cmdline" ] || continue
+    pid="${d#/proc/}"
+    [ "$pid" = "$$" ] && continue
+    cl="$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null)"
+    case "$cl" in
+      *"$APP_JS"*) echo "$pid" ;;
+      *fnbookshelf*/target/server/app.js*) echo "$pid" ;;
+    esac
+  done
+}
+
+PIDS="$(app_pids)"
+if [ -f "$PID_FILE" ]; then
+  PIDS="$(printf '%s\n%s\n' "$PIDS" "$(cat "$PID_FILE" 2>/dev/null | tr -d '\r\n ')")"
+fi
+PIDS="$(printf '%s\n' "$PIDS" | sort -u | grep -E '^[0-9]+$')"
+
+if [ -n "$PIDS" ]; then
+  for p in $PIDS; do kill "$p" 2>/dev/null; done
+  waited=0
+  while [ "$waited" -lt 40 ]; do
+    LEFT="$(app_pids)"
+    [ -z "$LEFT" ] && break
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  LEFT="$(app_pids)"
+  if [ -n "$LEFT" ]; then
+    for p in $LEFT; do kill -9 "$p" 2>/dev/null; done
+    sleep 1
+  fi
+fi
+
+rm -f "$PID_FILE"
+exit 0

@@ -1,0 +1,54 @@
+# ---------- 依赖 ----------
+node_modules/
+
+# ---------- 构建 / 打包产物 ----------
+# fpk 安装包：每个 43~63MB，GitHub 单文件上限 100MB，全部 14 个约 600MB
+fnbookshelf/*.fpk
+*.fpk
+*.tgz
+# 内置 Node 运行时（52MB 二进制，构建时从系统复制）
+fnbookshelf/appsrc/node-runtime/
+# Android 工具链（JDK17 + build-tools + platform，1.2GB）
+android/tools/
+# Android 编译中间产物与安装包
+android/build/
+android/out/
+# 构建时解包 / 测试用的临时目录
+.test*/
+tmp*/
+tmpt*/
+
+# ---------- 签名密钥（绝对不能进仓库）----------
+android/keystore/
+*.jks
+*.keystore
+*.p12
+
+# ---------- 运行数据 / 密钥 / 日志 ----------
+fnbookshelf/data/
+**/data/secret.key
+**/data/data.json
+**/data/users.json
+**/data/logs/
+*.log
+*.pid
+
+# ---------- 私人信息（含 NAS 账号、内网 IP）----------
+.workbuddy/
+
+# ---------- 测试素材（体积大且可用 mk*.js 重新生成）----------
+testlib/
+
+# ---------- 本地调试脚本依赖（不属于项目本身）----------
+/package.json
+/package-lock.json
+_previews_local/
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~

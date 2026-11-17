@@ -1,0 +1,44 @@
+#!/bin/bash
+# 安装后：持久化向导配置 + 准备目录
+# 1.6.0 权限加固：
+#   - 不在应用根目录下 mkdir etc/ var/（fnOS 里它们是系统创建并授权好的软链接，
+#     以 root 强行创建实体目录会让框架后续 chown/ACL「设置目录权限」失败）；
+#   - 一律使用系统注入的 TRIM_PKGVAR / TRIM_PKGETC，失败时写明确日志而不是让安装整体失败；
+#   - 不对应用目录之外的路径做 chown / setfacl / chmod。
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VAR_DIR="${TRIM_PKGVAR:-$APP_ROOT/var}"
+ETC_DIR="${TRIM_PKGETC:-$APP_ROOT/etc}"
+LOGF="${TRIM_TEMP_LOGFILE:-/dev/null}"
+
+PORT="${wizard_port:-8096}"
+ADMIN_EMAIL="${wizard_admin_email:-}"
+
+# 目录由 fnOS 创建；这里只补齐子目录，任何失败都不阻断安装
+mkdir -p "$VAR_DIR/data" 2>/dev/null || true
+if [ ! -d "$VAR_DIR" ] || [ ! -w "$VAR_DIR" ]; then
+  echo "数据目录不可写（$VAR_DIR）：请在 fnOS「设置 → 应用 → 授权管理」为本应用授权，或换一个安装存储空间后重试。" > "$LOGF"
+fi
+
+# 写入持久配置（幂等：仅首次或字段为空时写入）
+if [ ! -f "$ETC_DIR/config.env" ]; then
+  if ! cat > "$ETC_DIR/config.env" 2>/dev/null <<CONF
+APP_PORT=$PORT
+ADMIN_EMAIL=$ADMIN_EMAIL
+CONF
+  then
+    echo "配置目录不可写（$ETC_DIR）：请检查应用安装存储空间权限后重试。" > "$LOGF"
+  fi
+fi
+
+# Node 可执行权限（tar 打包可能丢失执行位）
+chmod -R +x "$APP_ROOT/target/node/bin" 2>/dev/null || true
+
+# 兼容 1.5.0~1.6.0 的坏包：这些版本的 node/bin 里残留了指向已删除 lib/node_modules 的
+# 断链软链接（如 bin/corepack），系统的 chown/chmod/setfacl -R 遇到断链会返回 ENOENT，
+# 安装器即报「设置目录权限失败」。升级场景下先清一次，避免旧文件带进来。
+if [ -d "$APP_ROOT/target" ]; then
+  find "$APP_ROOT/target" -type l 2>/dev/null | while IFS= read -r _l; do
+    [ -e "$_l" ] || rm -f "$_l" 2>/dev/null
+  done
+fi
+exit 0

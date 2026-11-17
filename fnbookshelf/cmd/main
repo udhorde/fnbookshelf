@@ -1,0 +1,213 @@
+#!/bin/bash
+# 飞牛书屋 生命周期管理
+# 1.6.0：目录一律优先取系统注入的 TRIM_PKGVAR / TRIM_PKGETC。
+# 不在应用根目录硬造 etc/ var/（它们是 fnOS 建好并授权过的软链接），
+# 否则框架的「设置目录权限 / ACL」步骤会失败，安装直接报「无法安装 fnbookshelf」。
+#
+# 1.8.2.1 启动/停止加固（升级后「打不开」的根因就在这两个函数）：
+#   ① 旧版只用 `kill -0 $PID` 判断是否在运行。升级时 upgrade_init 只发 SIGTERM 就 sleep 1，
+#      旧进程往往还在写 100MB 的 data.json 没退完，PID 文件也还在；此时 start 认为「已在运行」
+#      直接 exit 0，新版本根本没被拉起来，应用中心却显示正常。
+#      现在改为校验该 PID 的命令行确实是本应用的 server/app.js，不是就清掉 PID 文件。
+#   ② 端口被占时先只清理「本应用自己的残留进程」（按 /proc/*/cmdline 精确匹配），
+#      清理后仍被别的程序占着才报错，避免直接把用户挡在门外。
+#   ③ 启动后不再只 sleep 2 看进程活着，而是等到端口真的能接受连接（最多 30 秒），
+#      失败时把 app.log 末尾写进安装日志，便于定位。
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+APP_NAME="fnbookshelf"
+NODE_BIN="$APP_ROOT/target/node/bin/node"
+APP_JS="$APP_ROOT/target/server/app.js"
+VAR_DIR="${TRIM_PKGVAR:-$APP_ROOT/var}"
+ETC_DIR="${TRIM_PKGETC:-$APP_ROOT/etc}"
+PID_FILE="$VAR_DIR/app.pid"
+LOG_FILE="$VAR_DIR/app.log"
+
+get_env() {
+  [ -f "$ETC_DIR/config.env" ] && . "$ETC_DIR/config.env"
+  PORT="${APP_PORT:-8096}"
+  ADMIN_EMAIL="${ADMIN_EMAIL:-}"
+}
+
+write_err() {
+  echo "$1" > "${TRIM_TEMP_LOGFILE:-/dev/null}"
+}
+
+# 该 PID 是否是「本应用的 node 进程」（防止 PID 被系统回收给别的进程后误判）
+# 安装目录可能经过软链接或被加上版本后缀，所以先按绝对路径精确匹配，
+# 再退一步按「应用名 + 入口」匹配，避免误杀别的应用。
+cmdline_of() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
+is_app_cmdline() {
+  case "$1" in
+    *"$APP_JS"*) return 0 ;;
+    *fnbookshelf*/target/server/app.js*) return 0 ;;
+  esac
+  return 1
+}
+pid_is_app() {
+  local pid="$1" cl
+  [ -n "$pid" ] || return 1
+  [ -r "/proc/$pid/cmdline" ] || return 1
+  cl="$(cmdline_of "$pid")"
+  is_app_cmdline "$cl"
+}
+
+status_running() {
+  [ -f "$PID_FILE" ] || return 1
+  local pid
+  pid="$(cat "$PID_FILE" 2>/dev/null | tr -d '\r\n ')"
+  pid_is_app "$pid"
+}
+
+# 列出所有本应用残留进程（不依赖 ps 的输出格式，busybox/coreutils 都适用）
+app_pids() {
+  local d pid cl
+  for d in /proc/[0-9]*; do
+    [ -r "$d/cmdline" ] || continue
+    cl="$(cmdline_of "${d#/proc/}")"
+    if is_app_cmdline "$cl"; then
+      pid="${d#/proc/}"
+      [ "$pid" = "$$" ] && continue
+      echo "$pid"
+    fi
+  done
+}
+
+# 停止本应用的进程：SIGTERM 等最多 20 秒（大书库收尾落盘需要时间），仍在则 SIGKILL
+stop_app() {
+  local pids p waited
+  pids="$(app_pids)"
+  if [ -z "$pids" ]; then
+    rm -f "$PID_FILE"
+    return 0
+  fi
+  for p in $pids; do kill "$p" 2>/dev/null; done
+  waited=0
+  while [ "$waited" -lt 40 ]; do
+    pids="$(app_pids)"
+    [ -z "$pids" ] && break
+    sleep 0.5
+    waited=$((waited + 1))
+  done
+  pids="$(app_pids)"
+  if [ -n "$pids" ]; then
+    for p in $pids; do kill -9 "$p" 2>/dev/null; done
+    sleep 1
+  fi
+  rm -f "$PID_FILE"
+  return 0
+}
+
+# 端口是否已可建立 TCP 连接（HTTPS 的握手先不管，能连上就说明服务在监听）
+port_open() {
+  (exec 3<>"/dev/tcp/127.0.0.1/$PORT") 2>/dev/null
+}
+
+port_busy() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -lnt 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$PORT\$"
+    return $?
+  fi
+  port_open
+}
+
+case "$1" in
+start)
+  get_env
+  if [ ! -x "$NODE_BIN" ]; then
+    chmod +x "$NODE_BIN" 2>/dev/null
+    chmod -R +x "$APP_ROOT/target/node/bin" 2>/dev/null
+  fi
+  if [ ! -x "$NODE_BIN" ]; then
+    write_err "未找到 Node 运行时：$NODE_BIN"
+    exit 1
+  fi
+  if [ ! -f "$APP_JS" ]; then
+    write_err "未找到应用入口：$APP_JS"
+    exit 1
+  fi
+  # 真的在运行才直接返回；PID 文件残留（升级/强杀后常见）则清掉继续启动
+  if status_running; then
+    if port_open; then
+      exit 0
+    fi
+    # 进程在但端口没起来：可能是卡在启动/IO，先停干净再拉起
+    stop_app
+  else
+    rm -f "$PID_FILE"
+  fi
+  # 运行时目录：系统给的 var/ 不可写时，退回应用自身目录，不让启动直接失败
+  if [ ! -d "$VAR_DIR" ] || [ ! -w "$VAR_DIR" ]; then
+    VAR_DIR="$APP_ROOT/var"
+    PID_FILE="$VAR_DIR/app.pid"
+    LOG_FILE="$VAR_DIR/app.log"
+    mkdir -p "$VAR_DIR" 2>/dev/null
+  fi
+  if [ ! -w "$VAR_DIR" ]; then
+    write_err "运行数据目录不可写（$VAR_DIR）。请在 fnOS「设置 → 应用 → 授权管理」为本应用授权，或把应用装到另一个存储空间。"
+    exit 1
+  fi
+  # 端口被占：先清自己的残留（升级后旧进程没退干净的典型情况），再判断是不是别人占的
+  if port_busy; then
+    if [ -n "$(app_pids)" ]; then
+      stop_app
+      sleep 1
+    fi
+    if port_busy; then
+      write_err "端口 $PORT 已被其它程序占用（不是飞牛书屋的进程）。请结束占用该端口的程序，或在应用设置里更换端口后重试。"
+      exit 1
+    fi
+  fi
+  # 数据目录：默认放在应用自身数据目录下；管理员可在后台迁移到 NAS 任意已授权目录
+  DATA_DIR="$VAR_DIR/data"
+  if [ -f "$ETC_DIR/data_dir" ]; then
+    _DD="$(head -n 1 "$ETC_DIR/data_dir" 2>/dev/null | tr -d '\r\n')"
+    case "$_DD" in
+      /*) DATA_DIR="$_DD" ;;
+    esac
+  fi
+  mkdir -p "$DATA_DIR" 2>/dev/null
+  if [ ! -w "$DATA_DIR" ]; then
+    # 自定义数据目录没被 fnOS 授权：回落到应用默认目录，保证服务可用并给出提示
+    write_err "自定义数据目录不可写（$DATA_DIR）：已回落到应用默认目录。请先到「应用设置 → 访问权限」授权该目录，再到「运行设置」切换。"
+    DATA_DIR="$VAR_DIR/data"
+    mkdir -p "$DATA_DIR" 2>/dev/null
+  fi
+  echo "[cmd/main] $(date '+%F %T') 启动：端口 $PORT，数据目录 $DATA_DIR" >> "$LOG_FILE" 2>/dev/null
+  PORT="$PORT" ADMIN_EMAIL="$ADMIN_EMAIL" DATA_DIR="$DATA_DIR" APP_ROOT="$APP_ROOT" \
+    nohup "$NODE_BIN" "$APP_JS" >> "$LOG_FILE" 2>&1 &
+  echo $! > "$PID_FILE"
+  # 等待端口真正可用：大书库首次加载要解析几十 MB 的 data.json（NAS 机械盘上更慢）
+  i=0
+  while [ "$i" -lt 60 ]; do
+    if ! kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
+      write_err "启动失败（进程已退出），最近日志：$(tail -n 8 "$LOG_FILE" 2>/dev/null)"
+      rm -f "$PID_FILE"
+      exit 1
+    fi
+    if port_open; then
+      exit 0
+    fi
+    sleep 0.5
+    i=$((i + 1))
+  done
+  write_err "启动超时：进程在运行但端口 $PORT 30 秒内未就绪，最近日志：$(tail -n 8 "$LOG_FILE" 2>/dev/null)"
+  exit 1
+  ;;
+stop)
+  stop_app
+  exit 0
+  ;;
+restart)
+  stop_app
+  exec "$0" start
+  ;;
+status)
+  if status_running; then
+    exit 0
+  fi
+  exit 3
+  ;;
+*)
+  exit 1
+  ;;
+esac

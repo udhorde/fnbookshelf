@@ -1,0 +1,12 @@
+#!/bin/bash
+# 卸载前：确保进程退出（不删除任何用户图书文件）
+APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PID_FILE="${TRIM_PKGVAR:-$APP_ROOT/var}/app.pid"
+if [ -f "$PID_FILE" ]; then
+  PID="$(cat "$PID_FILE")"
+  kill "$PID" 2>/dev/null
+  sleep 1
+  kill -9 "$PID" 2>/dev/null
+  rm -f "$PID_FILE"
+fi
+exit 0

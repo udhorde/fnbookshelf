@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 浅色状态栏 + 深色图标（API 23 起支持） -->
+    <style name="FnbPhone" parent="FnbPhoneBase">
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

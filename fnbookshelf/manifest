@@ -1,0 +1,16 @@
+appname=fnbookshelf
+version=1.9.3
+display_name=飞牛书屋
+desc=飞牛书屋 · 把 NAS 上的电子书变成一个可搜、可读、可整理的书架。【入库】以原始文件名入库，同名书默认合并，再交给后台刮削；刮不到封面时自动用 PDF 首页当封面；【找书】搜索会同时命中书名、作者、文件名与目录路径；没搜到可以一键通知管理员；书库支持按格式筛选，批量操作收在一个「☑ 批量」按钮里，选完再决定「合并」还是「加入专题」；【专题】专题与全部图书并列，可设置封面，详情页里能直接管理这部作品所在的专辑；【阅读】EPUB / PDF / MOBI / AZW3 / TXT / CBZ / DOC / DOCX / PPT / PPTX 直接在浏览器里读，PDF 新增亮度与对比度调节；TV 端打开即全屏，方向键只移动焦点不再误翻页；【客户端】提供手机平板版与 TV 版安卓客户端，页面左下角可下载，APP 会自检新版并直接调起安装，内置下载管理。开发者 / 发布者：萨特
+platform=x86
+source=thirdparty
+developer=萨特
+publisher=萨特
+maintainer=萨特
+os_min_version=0.9.0
+service_port=8096
+checkport=true
+ctl_stop=true
+desktop_uidir=ui
+desktop_applaunchname=fnbookshelf.Application
+changelog=1.9.3：修复阅读器退出后页面卡住——点退出时外框残留、内容消失且无法再操作，现在关闭一定清干净并能立即再打开；修复部分 PDF、PPT 在特定分辨率下每页底部多出一大段灰底空白，改为按每页真实宽高比占位，横竖混排页也不再留白；修复一部作品含多个文件时「合并进来」仍只能一个一个挪，现在候选列表按作品聚合，可一次「合并全部 N 个文件」并入。

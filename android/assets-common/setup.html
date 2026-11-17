@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>连接飞牛书屋</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+    background: #f5f6f8; color: #1f2937;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .wrap { width: 100%; max-width: 460px; }
+  .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
+  .mark {
+    width: 52px; height: 52px; border-radius: 14px; flex: none;
+    background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+    box-shadow: 0 6px 16px rgba(37, 99, 235, .30);
+    position: relative;
+  }
+  .mark i { position: absolute; top: 14px; width: 11px; height: 24px; background: #fff; display: block; }
+  .mark i.l { left: 13px; border-radius: 4px 1px 1px 4px; }
+  .mark i.r { right: 13px; border-radius: 1px 4px 4px 1px; }
+  h1 { font-size: 21px; margin: 0 0 4px; letter-spacing: .01em; }
+  .sub { font-size: 13px; color: #6b7280; margin: 0; }
+  .card {
+    background: #fff; border-radius: 16px; padding: 22px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .06), 0 12px 30px rgba(15, 23, 42, .05);
+  }
+  label { display: block; font-size: 13px; color: #374151; font-weight: 600; margin-bottom: 8px; }
+  input[type=url] {
+    width: 100%; padding: 13px 14px; font-size: 15px; color: #111827;
+    border: 1px solid #d1d5db; border-radius: 10px; outline: none;
+    background: #fbfbfd; transition: border-color .15s, box-shadow .15s;
+    font-family: inherit;
+  }
+  input[type=url]:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37, 99, 235, .15); background: #fff; }
+  .hint { font-size: 12px; color: #9ca3af; margin: 8px 0 0; line-height: 1.6; }
+  .row { display: flex; gap: 10px; margin-top: 18px; }
+  button {
+    flex: 1; padding: 13px 16px; font-size: 15px; font-family: inherit; font-weight: 600;
+    border-radius: 10px; border: 1px solid #d1d5db; background: #fff; color: #374151;
+    cursor: pointer; transition: transform .06s, background .15s;
+  }
+  button:active { transform: scale(.985); }
+  button.primary { background: #2563eb; border-color: #2563eb; color: #fff; box-shadow: 0 6px 14px rgba(37, 99, 235, .25); }
+  button[disabled] { opacity: .55; }
+  .status { margin-top: 16px; font-size: 13px; line-height: 1.65; border-radius: 10px; padding: 11px 13px; display: none; }
+  .status.show { display: block; }
+  .status.ok { background: #ecfdf5; color: #047857; }
+  .status.err { background: #fef2f2; color: #b91c1c; }
+  .status.wait { background: #eff6ff; color: #1d4ed8; }
+  .status a { color: inherit; font-weight: 700; }
+  .foot { text-align: center; font-size: 12px; color: #9ca3af; margin-top: 18px; }
+  .tv-tip { display: none; font-size: 12px; color: #6b7280; background: #eef2ff; border-radius: 10px; padding: 10px 12px; margin-top: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo">
+    <div class="mark"><i class="l"></i><i class="r"></i></div>
+    <div>
+      <h1>飞牛书屋</h1>
+      <p class="sub">连接到你的 NAS 书库</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <label for="url">服务器地址</label>
+    <input id="url" type="url" inputmode="url" autocapitalize="off" autocorrect="off"
+           spellcheck="false" placeholder="192.168.1.10:8096" value="{{url}}">
+    <p class="hint">填 NAS 的 IP 或域名，端口默认 8096。只填主机名会自动使用 https。</p>
+
+    <div class="row">
+      <button id="btnTest" type="button">测试连接</button>
+      <button id="btnGo" class="primary" type="button">进入书屋</button>
+    </div>
+
+    <div id="status" class="status"></div>
+    <div class="tv-tip" id="tvTip">电视上：方向键移动，确定键输入地址。</div>
+  </div>
+
+  <p class="foot">{{variant}} · v{{version}}</p>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var input = $('url'), status = $('status'), btnTest = $('btnTest'), btnGo = $('btnGo');
+  var cbs = {}, seq = 0, busy = false, lastFail = '';
+
+  window.__fnbCb = function (id, res) {
+    var f = cbs[id];
+    if (f) { delete cbs[id]; f(res || {}); }
+  };
+
+  function call(method, arg) {
+    return new Promise(function (resolve) {
+      var id = 'c' + (++seq);
+      cbs[id] = resolve;
+      try { FNB[method](arg, id); } catch (e) { resolve({ ok: false, msg: '客户端调用失败：' + e.message }); }
+    });
+  }
+
+  function say(kind, html) {
+    status.className = 'status show ' + kind;
+    status.innerHTML = html;
+  }
+
+  function hide() { status.className = 'status'; }
+
+  function setBusy(v) {
+    busy = v;
+    btnTest.disabled = v;
+    btnGo.disabled = v;
+  }
+
+  function current() {
+    var v = (input.value || '').trim();
+    if (!v) { say('err', '请先填写服务器地址'); input.focus(); return ''; }
+    return v;
+  }
+
+  btnTest.addEventListener('click', function () {
+    if (busy) return;
+    var v = current();
+    if (!v) return;
+    setBusy(true);
+    say('wait', '正在连接 ' + v + ' …');
+    call('test', v).then(function (r) {
+      setBusy(false);
+      if (r.ok) {
+        say('ok', '✅ 连接成功：' + (r.siteName || '飞牛书屋') + '　用时 ' + (r.ms || 0) + ' ms'
+          + '<br>点「进入书屋」开始使用。');
+      } else {
+        lastFail = v;
+        say('err', '❌ ' + (r.msg || '连接失败'));
+      }
+    });
+  });
+
+  btnGo.addEventListener('click', function () {
+    if (busy) return;
+    var v = current();
+    if (!v) return;
+    setBusy(true);
+    say('wait', '正在连接并保存 …');
+    call('save', v).then(function (r) {
+      setBusy(false);
+      if (r.ok) {
+        say('ok', '已连接 ' + (r.siteName || '') + '，正在打开 …');
+        return;
+      }
+      say('err', '❌ ' + (r.msg || '连接失败')
+        + '<br><a href="#" id="force">仍然保存并尝试打开</a>');
+      var f = $('force');
+      if (f) {
+        f.addEventListener('click', function (e) {
+          e.preventDefault();
+          call('saveForce', v);
+        });
+      }
+    });
+  });
+
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); btnGo.click(); }
+  });
+
+  // 预填上次的地址，并让光标落在末尾
+  if (input.value) {
+    setTimeout(function () {
+      try { input.focus(); input.setSelectionRange(input.value.length, input.value.length); } catch (e) { }
+    }, 120);
+  } else {
+    setTimeout(function () { try { input.focus(); } catch (e) { } }, 120);
+  }
+
+  try {
+    var info = JSON.parse(FNB.info());
+    if (info && info.tv) $('tvTip').style.display = 'block';
+  } catch (e) { }
+})();
+</script>
+</body>
+</html>

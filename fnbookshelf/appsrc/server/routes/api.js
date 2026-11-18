@@ -1987,23 +1987,38 @@ module.exports = function buildApi(ctx) {
     return c;
   }
 
-  // ============ AI（严格限制：只接收当前页片段，禁止上传整本书） ============
-  const AI_LIMITS = { context: 1500, translate: 1500, historyItem: 400, historyTotal: 1200, question: 320, query: 200, body: 64 * 1024 };
-  // HTTP 层：整本文本通常远超 64KB，直接挡在门外，连解析都不做
+  // ============ AI（严格限制：只接收当前位置片段 / 单页截图，禁止上传整本书） ============
+  const AI_LIMITS = {
+    context: 1500, translate: 1500, historyItem: 400, historyTotal: 1200, question: 320, query: 200,
+    chapter: 120, body: 64 * 1024,
+    // 1.9.5：无法提取文字时改发「当前页面截图」，HTTP 层上限放宽，但图片本身单独限尺寸；
+    // 纯文字请求仍按 64KB 拦（防止有人把整本书塞进请求体）
+    bodyImage: 3.2 * 1024 * 1024, image: 2.4 * 1024 * 1024
+  };
+  // HTTP 层：先挡明显过大的请求；带截图的请求在下面按「图片大小 + 文字限额」分别校验
   r.use('/ai', (req, res, next) => {
     const len = Number(req.headers['content-length'] || 0);
-    if (len > AI_LIMITS.body) return res.status(413).json({ error: '请求内容过大：AI 功能只接收当前页片段，禁止上传整本书内容', blocked: 'whole-book' });
+    if (len > AI_LIMITS.bodyImage) return res.status(413).json({ error: '请求内容过大：AI 功能只接收当前位置片段或单页截图，禁止上传整本书内容', blocked: 'whole-book' });
     next();
   });
-  function aiPayloadError(body, kind) {
+  function aiPayloadError(body, kind, rawLen) {
     const b = body || {};
+    const img = typeof b.image === 'string' ? b.image : '';
     if (kind === 'ask') {
       const ctx = String(b.context || '');
-      if (ctx.length > AI_LIMITS.context) return `上下文 ${ctx.length} 字超过上限：AI 只允许使用当前页片段（≤${AI_LIMITS.context} 字），禁止上传整本书内容`;
+      if (ctx.length > AI_LIMITS.context) return `上下文 ${ctx.length} 字超过上限：AI 只允许使用当前位置片段（≤${AI_LIMITS.context} 字），禁止上传整本书内容`;
+      if (String(b.chapter || '').length > AI_LIMITS.chapter) return `章节标题过长（超过 ${AI_LIMITS.chapter} 字）`;
       const hist = Array.isArray(b.history) ? b.history : [];
       const total = hist.reduce((n, h) => n + String((h && h.content) || '').length, 0);
       if (hist.some(h => String((h && h.content) || '').length > AI_LIMITS.historyItem) || total > AI_LIMITS.historyTotal) return '对话历史过长，AI 不接收整本书或长篇对话，请重新开始提问';
       if (String(b.question || '').length > AI_LIMITS.question) return `问题过长，请精简到 ${AI_LIMITS.question} 字以内`;
+      if (img) {
+        // 只接受单张 JPEG/PNG/WebP 的 data URL
+        if (!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(img)) return '截图格式不支持：只接受 JPEG / PNG / WebP 的单页截图';
+        if (img.length > AI_LIMITS.image) return `截图过大（${Math.round(img.length / 1024)}KB）：请控制在 ${Math.round(AI_LIMITS.image / 1024)}KB 以内`;
+      } else if (rawLen > AI_LIMITS.body) {
+        return '请求内容过大：AI 功能只接收当前位置片段，禁止上传整本书内容';
+      }
     }
     if (kind === 'translate') {
       const t = String(b.text || '');
@@ -2026,7 +2041,7 @@ module.exports = function buildApi(ctx) {
 
   r.post('/ai/ask', auth.requireAuth, wrap(async (req, res) => {
     const c = requireAi();
-    const blocked = aiPayloadError(req.body, 'ask');
+    const blocked = aiPayloadError(req.body, 'ask', Number(req.headers['content-length'] || 0));
     if (blocked) return res.status(413).json({ error: blocked, blocked: 'whole-book' });
     if (c.ask === false) return res.status(403).json({ error: '管理员已关闭阅读问答功能' });
     const q = String((req.body && req.body.question) || '');
@@ -2039,9 +2054,15 @@ module.exports = function buildApi(ctx) {
 
     const book = req.body.bookId ? store.findBook(req.body.bookId) : null;
     if (!book) return res.status(404).json({ error: '请先打开一本书再提问' });
+    const pg = Number(req.body.page);
+    const para = Number(req.body.paragraph);
     const out = await ai.askAboutBook(c, {
       question: q, book,
       context: String((req.body && req.body.context) || '').slice(0, AI_LIMITS.context),
+      chapter: String((req.body && req.body.chapter) || '').slice(0, AI_LIMITS.chapter),
+      page: Number.isFinite(pg) && pg > 0 ? Math.floor(pg) : 0,
+      paragraph: Number.isFinite(para) && para > 0 ? Math.floor(para) : 0,
+      image: typeof req.body.image === 'string' ? req.body.image : '',
       history: (Array.isArray(req.body.history) ? req.body.history.slice(-4) : [])
         .map(h => ({ role: h.role, content: String(h.content || '').slice(0, AI_LIMITS.historyItem) }))
     });

@@ -442,7 +442,7 @@
         h('div', { class: 'rd-grow' }),
         h('button', { class: 'rd-x', onclick: () => toggleDrawer(aiPanel, false) }, '✕')),
       h('div', { style: 'font-size:11px;color:#94a3b8;padding:6px 12px;border-bottom:1px solid rgba(148,163,184,.2)' },
-        '仅发送当前页附近的文字片段（≤1200 字），不会上传整本书内容'),
+        '会带上书籍信息、当前章节与段落附近的文字（≤1200 字）；这一页没有可提取的文字时改发当前页面截图，不会上传整本书'),
       aiLog,
       h('div', { class: 'rd-ai-foot' },
         h('div', { class: 'rd-ai-tips' },
@@ -464,38 +464,193 @@
       return row;
     }
 
-    const AI_CTX_LIMIT = 1200; // 只发送当前页片段，绝不上传整本书
-    const clipCtx = t => String(t || '').replace(/[ \t]+/g, ' ').slice(0, AI_CTX_LIMIT);
-    async function aiContext() {
-      // 取当前阅读位置附近的文字（严格截断，服务端还有 1500 字硬上限）
+    const AI_CTX_LIMIT = 1200; // 只发送当前位置片段，绝不上传整本书
+    const clipCtx = t => String(t || '').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim().slice(0, AI_CTX_LIMIT);
+
+    // 目录里按当前 href（EPUB）或行号（TXT）找章节名
+    function aiChapter(href, line) {
       try {
-        if (rendition) {
-          const c = rendition.getContents()[0];
-          const t = c && c.content && c.content.body ? c.content.body.innerText : '';
-          return clipCtx(t);
+        if (href) {
+          const h = String(href).split('#')[0];
+          let hit = '';
+          toc.forEach(t => {
+            const th = String(t.href || '').split('#')[0];
+            if (!th) return;
+            if (th === h || h.endsWith('/' + th) || th.endsWith('/' + h)) hit = t.label;
+          });
+          if (hit) return hit;
         }
-        if (pdfDoc) {
-          const start = Math.max(1, pdfPage);
-          const parts = [];
-          for (let p = start; p < start + 2 && p <= pdfDoc.numPages; p++) {
-            const pg = await pdfDoc.getPage(p);
-            const tc = await pg.getTextContent();
-            parts.push(tc.items.map(i => i.str).join(' '));
-          }
-          return clipCtx(parts.join('\n'));
-        }
-        if (txtView) {
-          const all = txtParas.map(p => p.textContent);
-          const idx = Math.max(0, txtParas.findIndex(p => p.getBoundingClientRect().top > 0));
-          return clipCtx(all.slice(Math.max(0, idx - 2), idx + 12).join('\n'));
-        }
-        if (mobiFrames.length) {
-          const f = mobiFrames[Math.min(mobiFrames.length - 1, 0)];
-          try { return clipCtx(f.contentDocument.body.innerText); } catch (_) {}
+        if (line != null && Number.isFinite(Number(line))) {
+          let hit = '';
+          toc.forEach(t => { const l = Number(t.line); if (Number.isFinite(l) && l <= Number(line)) hit = t.label; });
+          if (hit) return hit;
         }
       } catch (_) {}
       return '';
     }
+
+    // PDF 内置大纲 → 当前页所属章节
+    async function aiPdfChapter(n) {
+      try {
+        const ol = await pdfDoc.getOutline();
+        if (!ol || !ol.length) return '';
+        let best = '';
+        for (const it of ol) {
+          let pgNo = 0;
+          try {
+            if (typeof it.dest === 'string') {
+              const d = await pdfDoc.getDestination(it.dest);
+              if (d && d[0]) pgNo = (await pdfDoc.getPageIndex(d[0])) + 1;
+            } else if (Array.isArray(it.dest) && it.dest.length) {
+              pgNo = (await pdfDoc.getPageIndex(it.dest[0])) + 1;
+            }
+          } catch (_) {}
+          if (pgNo && pgNo <= n) best = it.title || best;
+        }
+        return best;
+      } catch (_) { return ''; }
+    }
+
+    /**
+     * 1.9.5：定位当前阅读位置，返回 { context, chapter, paragraph, page }
+     * context 过短说明这一页没有文字层（扫描版 PDF / 漫画 / 图片页），调用方应改发截图。
+     */
+    async function aiLocate() {
+      const out = { context: '', chapter: '', paragraph: null, page: null };
+      try {
+        if (rendition) {
+          const contents = rendition.getContents()[0];
+          const doc = contents && contents.document;
+          const st = (rendition.currentLocation() || {}).start || {};
+          out.chapter = aiChapter(st.href);
+          if (doc && doc.body) {
+            // 当前视口里的第一个段落 → 段落序号 + 附近几段（比整页 innerText 更贴合「我看到的这段」）
+            const nodes = [...doc.body.querySelectorAll('p,li,blockquote,dd,dt,h1,h2,h3,h4,h5,h6,pre')]
+              .filter(n => (n.textContent || '').trim().length > 1);
+            if (nodes.length) {
+              let idx = nodes.findIndex(n => n.getBoundingClientRect().bottom > 0);
+              if (idx < 0) idx = 0;
+              out.paragraph = idx + 1;
+              out.context = clipCtx(nodes.slice(Math.max(0, idx - 1), idx + 6).map(n => n.textContent.trim()).join('\n'));
+            }
+            if (!out.context) out.context = clipCtx(doc.body.innerText);
+          }
+          return out;
+        }
+        if (pdfDoc) {
+          out.page = pdfPage;
+          const parts = [];
+          for (let p = pdfPage; p < pdfPage + 2 && p <= pdfDoc.numPages; p++) {
+            try {
+              const pg = await pdfDoc.getPage(p);
+              const tc = await pg.getTextContent();
+              parts.push(tc.items.map(i => i.str).join(' '));
+            } catch (_) {}
+          }
+          out.context = clipCtx(parts.join('\n').replace(/\s+/g, ' '));
+          out.chapter = await aiPdfChapter(pdfPage);
+          return out;
+        }
+        if (txtView) {
+          const idx = Math.max(0, txtParas.findIndex(p => p.getBoundingClientRect().top > 0));
+          const abs = txtBase + idx + 1;
+          out.paragraph = abs;
+          out.context = clipCtx(txtParas.slice(Math.max(0, idx - 1), idx + 10).map(p => p.textContent.trim()).join('\n'));
+          out.chapter = aiChapter('', abs);
+          return out;
+        }
+        if (mobiFrames.length) {
+          const vis = mobiFrames.find(f => {
+            try { const r = f.getBoundingClientRect(); return r.bottom > 0 && r.top < (window.innerHeight || 800); } catch (_) { return false; }
+          }) || mobiFrames[0];
+          try { out.context = clipCtx(vis.contentDocument.body.innerText); } catch (_) {}
+          if (!out.context && body.innerText) out.context = clipCtx(body.innerText);
+          return out;
+        }
+        // 其它（docx 片段、图片版降级等）：先抓容器文字
+        if (body.innerText) out.context = clipCtx(body.innerText);
+      } catch (_) {}
+      return out;
+    }
+
+    // ---- 定位不到文字时：把当前页面截成一张图（只截一页，≤1280px 宽，JPEG） ----
+    const SHOT_MAX_W = 1280;
+    function canvasToShot(cv) {
+      try {
+        if (!cv || !cv.width || !cv.height) return '';
+        const scale = Math.min(1, SHOT_MAX_W / cv.width);
+        const c2 = document.createElement('canvas');
+        c2.width = Math.max(1, Math.round(cv.width * scale));
+        c2.height = Math.max(1, Math.round(cv.height * scale));
+        const cx = c2.getContext('2d');
+        cx.fillStyle = '#fff';
+        cx.fillRect(0, 0, c2.width, c2.height);
+        cx.drawImage(cv, 0, 0, c2.width, c2.height);
+        return c2.toDataURL('image/jpeg', 0.72);
+      } catch (_) { return ''; }
+    }
+    function imgToShot(img) {
+      try {
+        const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+        if (!w || !h) return '';
+        const scale = Math.min(1, SHOT_MAX_W / w);
+        const c2 = document.createElement('canvas');
+        c2.width = Math.max(1, Math.round(w * scale));
+        c2.height = Math.max(1, Math.round(h * scale));
+        c2.getContext('2d').drawImage(img, 0, 0, c2.width, c2.height);
+        return c2.toDataURL('image/jpeg', 0.72);
+      } catch (_) { return ''; }
+    }
+    async function svgToShot(svg) {
+      try {
+        const vb = svg.viewBox && svg.viewBox.baseVal;
+        const w = (vb && vb.width) || svg.clientWidth || 960;
+        const h = (vb && vb.height) || svg.clientHeight || 540;
+        const clone = svg.cloneNode(true);
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+        clone.setAttribute('width', String(w));
+        clone.setAttribute('height', String(h));
+        const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+        const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+        const scale = Math.min(1, SHOT_MAX_W / w);
+        const c2 = document.createElement('canvas');
+        c2.width = Math.max(1, Math.round(w * scale));
+        c2.height = Math.max(1, Math.round(h * scale));
+        const cx = c2.getContext('2d');
+        cx.fillStyle = '#fff';
+        cx.fillRect(0, 0, c2.width, c2.height);
+        cx.drawImage(im, 0, 0, c2.width, c2.height);
+        return c2.toDataURL('image/jpeg', 0.75);
+      } catch (_) { return ''; }
+    }
+    async function capturePageImage() {
+      try {
+        // PDF：当前页 canvas（滚动模式带 data-page，单页模式取第一块）
+        if (pdfDoc) {
+          const cv = body.querySelector(`canvas.rd-page[data-page="${pdfPage}"]`) || body.querySelector('canvas.rd-page');
+          const shot = canvasToShot(cv);
+          if (shot) return shot;
+        }
+        // PPT：当前页是 SVG，先栅格化（视觉模型不认 SVG）
+        const svg = body.querySelector('.ppv-page svg') || body.querySelector('svg');
+        if (svg) {
+          const shot = await svgToShot(svg);
+          if (shot) return shot;
+        }
+        // 漫画 / 图片页：取视口里那张图
+        const imgs = [...body.querySelectorAll('img')].filter(im => {
+          try { const r = im.getBoundingClientRect(); return r.bottom > 0 && r.top < (window.innerHeight || 800) && r.width > 120; } catch (_) { return false; }
+        });
+        if (imgs.length) {
+          const shot = imgToShot(imgs[0]);
+          if (shot) return shot;
+        }
+      } catch (_) {}
+      return '';
+    }
+
+    // 翻译等只需要纯文字的调用方
+    async function aiContext() { const l = await aiLocate(); return l.context || ''; }
 
     async function askAi(q) {
       q = String(q || '').trim();
@@ -506,10 +661,26 @@
       const thinking = aiSay('ai', '思考中…');
       thinking.classList.add('thinking');
       try {
-        const ctx = await aiContext();
+        const loc = await aiLocate();
+        const payload = {
+          bookId: b.id, question: q,
+          context: (loc.context || '').slice(0, AI_CTX_LIMIT),
+          history: aiHistory.slice(-4)
+        };
+        if (loc.chapter) payload.chapter = String(loc.chapter).slice(0, 100);
+        if (loc.page) payload.page = loc.page;
+        if (loc.paragraph) payload.paragraph = loc.paragraph;
+        // 1.9.5：定位不到正文（扫描版 PDF / 漫画 / 图片页）→ 改发当前页面截图
+        if (!payload.context || payload.context.length < 24) {
+          const shot = await capturePageImage();
+          if (shot) {
+            payload.image = shot;
+            aiSay('sys', '这一页没有可提取的文字，已把当前页面截图发给 AI（只发这一页）。');
+          }
+        }
         const r = await api('/ai/ask', {
           method: 'POST',
-          body: JSON.stringify({ bookId: b.id, question: q, context: ctx, history: aiHistory.slice(-4) })
+          body: JSON.stringify(payload)
         });
         thinking.remove();
         if (r.refused) {

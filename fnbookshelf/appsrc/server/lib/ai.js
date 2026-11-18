@@ -183,6 +183,15 @@ ${shot
     r = await chat(cfg, msgs, { maxTokens: cfg.maxTokens || 600 });
   } catch (e) {
     if (e && e.timeout) return { refused: false, answer: TIMEOUT_REPLY, timeout: true };
+    // 发的模型不支持图片输入（纯文本模型）时，别把原始 API 报错甩给用户
+    if (shot && e && /image|vision|multimodal/i.test(String(e.message || ''))) {
+      return {
+        refused: false,
+        visionUnsupported: true,
+        answer: '这一页没有可提取的文字，需要把页面截图交给 AI，但当前配置的模型不支持图片输入。'
+          + '请在「管理后台 → AI 设置」换用支持视觉的模型（例如 gpt-4o-mini、qwen-vl-max），或翻到有文字层的页面再提问。'
+      };
+    }
     throw e;
   }
   return { refused: false, answer: r.content || TIMEOUT_REPLY, usage: r.usage, model: r.model, vision: !!shot };

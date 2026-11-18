@@ -24,7 +24,17 @@ LOG_FILE="$VAR_DIR/app.log"
 
 get_env() {
   [ -f "$ETC_DIR/config.env" ] && . "$ETC_DIR/config.env"
-  PORT="${APP_PORT:-8096}"
+  # 1.9.4：清掉手改配置可能带回的 CR/空白（PORT 带上 \r 后 /dev/tcp 与 ss 探测都会失灵）
+  PORT="$(printf '%s' "${APP_PORT:-8096}" | tr -d '\r')"
+  PORT="${PORT//[[:space:]]/}"
+  PORT="${PORT:-8096}"
+  # 1.9.4：报「端口被占」时必须能看出当前端口从哪来，
+  # 否则「改了端口没写进配置」和「新端口恰好也被占」两种情况用户根本分不清
+  if [ -n "${APP_PORT:-}" ]; then
+    PORT_SRC="配置文件 $ETC_DIR/config.env 里的 APP_PORT"
+  else
+    PORT_SRC="默认值 8096（$ETC_DIR/config.env 不存在，或里面没写 APP_PORT）"
+  fi
   ADMIN_EMAIL="${ADMIN_EMAIL:-}"
 }
 
@@ -153,7 +163,7 @@ start)
       sleep 1
     fi
     if port_busy; then
-      write_err "端口 $PORT 已被其它程序占用（不是飞牛书屋的进程）。请结束占用该端口的程序，或在应用设置里更换端口后重试。"
+      write_err "端口 $PORT 已被其它程序占用（不是飞牛书屋的进程）。当前端口来源：$PORT_SRC。请结束占用该端口的程序，或在应用设置里更换端口后重试；若你已改过端口、这里提示的仍是旧端口号，说明新端口没写进配置文件，请检查 $ETC_DIR 的写权限后在应用设置里重新保存一次。"
       exit 1
     fi
   fi

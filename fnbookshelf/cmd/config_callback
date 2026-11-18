@@ -1,15 +1,42 @@
 #!/bin/bash
 # 配置变更后：应用新配置并重启（1.6.0 起使用系统注入的配置目录）
+#
+# 1.9.4：端口写入改为幂等重写，修复「改了端口却始终没生效」：
+#   旧逻辑对已存在的 config.env 跑 sed "s/^APP_PORT=.../"——
+#   若文件里没有以 APP_PORT= 开头的行（只写了 ADMIN_EMAIL、行首带空格等），
+#   sed 是 no-op 且不追加新行；目录不可写时错误又被 2>/dev/null 吞掉。
+#   两种情况用户都只能反复看到「旧端口被占用」，换任何端口都没用。
+#   现在：先剔除全部 APP_PORT 旧行（顺手清 CRLF），再追加干净的新行，原子 mv 落盘；
+#   失败不再吞错，写入 fnOS 安装日志（TRIM_TEMP_LOGFILE）并带出实际配置路径。
 APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ETC_DIR="${TRIM_PKGETC:-$APP_ROOT/etc}"
+LOGF="${TRIM_TEMP_LOGFILE:-/dev/null}"
 
-if [ -n "${wizard_port:-}" ]; then
-  if [ -f "$ETC_DIR/config.env" ]; then
-    sed -i "s/^APP_PORT=.*/APP_PORT=$wizard_port/" "$ETC_DIR/config.env" 2>/dev/null
-  else
-    echo "APP_PORT=$wizard_port" > "$ETC_DIR/config.env" 2>/dev/null
-  fi
-fi
+case "${wizard_port:-}" in
+  ''|*[!0-9]*) ;;   # 未传端口或非纯数字（表单本有 ^[0-9]+$ 校验，这里兜底）：不动配置
+  *)
+    CONF="$ETC_DIR/config.env"
+    TMP="${CONF}.tmp.$$"
+    if [ -d "$CONF" ]; then
+      # config.env 是目录时 mv 会把临时文件移进去并返回成功，必须显式拦截
+      echo "端口写入失败：$CONF 是目录而非配置文件，应用将按旧端口启动。请卸载后重装本应用。" > "$LOGF"
+    else
+      # 幂等重写：保留其它配置行，只替换 APP_PORT
+      if [ -f "$CONF" ]; then
+        grep -v '^APP_PORT=' "$CONF" 2>/dev/null | tr -d '\r' 2>/dev/null > "$TMP" || : 2>/dev/null > "$TMP"
+      else
+        : 2>/dev/null > "$TMP"
+      fi
+      echo "APP_PORT=$wizard_port" 2>/dev/null >> "$TMP"
+      if mv -f "$TMP" "$CONF" 2>/dev/null; then
+        echo "端口已更新为 $wizard_port（写入 $CONF）" > "$LOGF"
+      else
+        rm -f "$TMP" 2>/dev/null
+        echo "端口写入失败：$CONF 所在目录不可写（$ETC_DIR），应用将按旧端口启动。请在 fnOS「设置 → 应用 → 授权管理」检查本应用的配置目录权限后，再到应用设置里重新保存端口。" > "$LOGF"
+      fi
+    fi
+    ;;
+esac
 
 "$APP_ROOT/cmd/main" stop >/dev/null 2>&1
 sleep 1

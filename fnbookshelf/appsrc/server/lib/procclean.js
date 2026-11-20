@@ -36,3 +36,65 @@ function killStaleAppProcesses(procRoot, killer) {
 }
 
 module.exports = { killStaleAppProcesses };
+
+/**
+ * 找出正在监听某端口的进程（1.9.6）。
+ * 报错只说「端口被占用」用户无从下手，这里给出进程名与 PID。
+ * 做法：读 /proc/net/tcp{,6} 里 state=0A(LISTEN) 且本地端口匹配的 socket inode，
+ * 再扫 /proc/<pid>/fd 反查谁持有该 socket。拿不到（权限不足/非 Linux）返回空数组。
+ * @param {number|string} port
+ * @returns {{pid:number,name:string}[]}
+ */
+function findPortHolder(port, procRoot) {
+  const out = [];
+  const root = procRoot || '/proc';
+  if (process.platform === 'win32' && !procRoot) return out;
+  const p = Number(port);
+  if (!p) return out;
+  const hex = p.toString(16).toUpperCase().padStart(4, '0');
+  const inodes = new Set();
+  for (const f of [root + '/net/tcp', root + '/net/tcp6']) {
+    let txt = '';
+    try { txt = fs.readFileSync(f, 'utf8'); } catch (_) { continue; }
+    for (const line of txt.split('\n').slice(1)) {
+      const c = line.trim().split(/\s+/);
+      if (c.length < 10 || c[3] !== '0A') continue;           // 0A = LISTEN
+      if (!c[1].endsWith(':' + hex)) continue;
+      inodes.add(c[9]);
+    }
+  }
+  if (!inodes.size) return out;
+  let entries = [];
+  try { entries = fs.readdirSync(root); } catch (_) { return out; }
+  for (const n of entries) {
+    if (!/^\d+$/.test(n)) continue;
+    const pid = Number(n);
+    if (pid === process.pid) continue;
+    let fds = [];
+    try { fds = fs.readdirSync(`${root}/${n}/fd`); } catch (_) { continue; }
+    let hit = false;
+    for (const fd of fds) {
+      let t = '';
+      try { t = fs.readlinkSync(`${root}/${n}/fd/${fd}`); } catch (_) { continue; }
+      const m = /^socket:\[(\d+)\]$/.exec(t);
+      if (m && inodes.has(m[1])) { hit = true; break; }
+    }
+    if (!hit) continue;
+    let name = '';
+    let cmd = '';
+    try { name = fs.readFileSync(`${root}/${n}/comm`, 'utf8').trim(); } catch (_) {}
+    try { cmd = fs.readFileSync(`/proc/${n}/cmdline`, 'utf8').replace(/\0/g, ' ').trim(); } catch (_) {}
+    // fnOS 的应用进程多半都叫 node，光报 comm 等于没说；从命令行里取应用名
+    let app = '';
+    const m1 = /\/var\/apps\/([^/\s]+)\//.exec(cmd);
+    const m2 = /([^/\s]+)\/target\/server\/app\.js/.exec(cmd);
+    if (m1) app = m1[1];
+    else if (m2) app = m2[1];
+    if (app === 'fnbookshelf') app = '飞牛书屋';
+    out.push({ pid, name: app || name || '未知进程', cmd });
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
+module.exports.findPortHolder = findPortHolder;

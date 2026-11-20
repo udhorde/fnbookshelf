@@ -44,7 +44,7 @@ const scanner = new Scanner(store);
 
 // ---- 日志 / 崩溃取证 ----
 const log = logger.init(DATA_DIR);
-log.version = '1.9.5';
+log.version = '1.9.6';
 log.setContext('启动');
 log.detectAbnormalExit();   // 上次是被 OOM / SIGKILL / 断电杀掉的？写进崩溃记录
 log.install(store);         // uncaughtException / unhandledRejection / 事件循环阻塞监控
@@ -336,7 +336,7 @@ if (httpsCfg.mode === 'off') {
 // 它的监听套接字还挂着 8096，新进程起不来，用户只能重启 NAS。这里改为先自愈：
 // 扫 /proc 找到本应用残留的 node 进程（命令行含 fnbookshelf 且是 server/app.js），
 // SIGKILL 清掉后再重试监听。见 lib/procclean.js。
-const { killStaleAppProcesses } = require('./lib/procclean');
+const { killStaleAppProcesses, findPortHolder } = require('./lib/procclean');
 
 let listenAttempt = 0;
 let staleKillTried = 0;   // 本次启动尝试清理过几个残留进程（用于把提示写准确）
@@ -355,11 +355,17 @@ server.on('error', e => {
   }
   let msg;
   if (code === 'EADDRINUSE') {
+    // 1.9.6：点名占用者，否则用户只知道「被占」却不知道去停哪个服务
+    let holders = [];
+    try { holders = findPortHolder(PORT); } catch (_) {}
+    const who = holders.length
+      ? holders.map(h => `${h.name}（PID ${h.pid}）`).join('、')
+      : '无法识别占用进程（可能权限不足）';
     msg = staleKillTried
-      ? `端口 ${PORT} 仍被占用：已清理过 ${staleKillTried} 个残留进程但端口仍未释放，`
+      ? `端口 ${PORT} 仍被占用（占用者：${who}）：已清理过 ${staleKillTried} 个残留进程但端口仍未释放，`
         + `说明那个进程卡在磁盘 IO 里（无法被信号终止）。请重启一次 NAS 释放端口，之后不会再出现。`
-      : `端口 ${PORT} 已被占用，且占用者不是本应用的进程（可能是别的服务）。`
-        + `请在飞牛「应用中心 → 飞牛书屋 → 设置」里换一个端口，或先停止占用该端口的服务。`
+      : `端口 ${PORT} 已被占用，占用者：${who}。`
+        + `请结束该进程，或在飞牛「应用中心 → 飞牛书屋 → 设置」里换一个空闲端口（改完会自动重启）。`
         + `若已在应用设置里改过端口、提示的仍是旧端口号，说明新端口没有写入配置文件，请在应用设置里重新保存一次。`;
   } else if (code === 'EACCES') {
     msg = `端口 ${PORT} 需要更高权限才能监听（1024 以下端口普通用户不可用），请在应用设置里换成 1024 以上的端口。`;

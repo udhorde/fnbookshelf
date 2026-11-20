@@ -120,6 +120,53 @@ port_busy() {
   port_open
 }
 
+# 1.9.6：报「端口被占」时必须点名占用者，否则用户只知道「被占」却无从下手。
+# 先走 ss -lntp（有权限时直接带 pid），拿不到再扫 /proc/net/tcp{,6} 的 socket inode
+# 反查 /proc/<pid>/fd，不依赖 ps / lsof（fnOS 上未必装了 lsof）。
+port_holder() {
+  local pids="" pid name hex inodes ino l fd d out="" cl a
+  if command -v ss >/dev/null 2>&1; then
+    pids="$(ss -lntp 2>/dev/null \
+      | awk -v p=":$PORT" 'substr($4, length($4) - length(p) + 1) == p {print}' \
+      | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u)"
+  fi
+  if [ -z "$pids" ] && [ -r /proc/net/tcp ]; then
+    hex="$(printf '%04X' "$PORT" 2>/dev/null)"
+    inodes="$(awk -v h="$hex" '$4 == "0A" && substr($2, length($2) - 3) == h {print $10}' \
+      /proc/net/tcp /proc/net/tcp6 2>/dev/null | sort -u)"
+    if [ -n "$inodes" ]; then
+      for d in /proc/[0-9]*; do
+        pid="${d#/proc/}"
+        [ "$pid" = "$$" ] && continue
+        for fd in "$d"/fd/*; do
+          l="$(readlink "$fd" 2>/dev/null)" || continue
+          case "$l" in
+            "socket:["*"]")
+              ino="${l#socket:[}"; ino="${ino%]}"
+              if printf '%s\n' "$inodes" | grep -qx "$ino"; then
+                pids="$pid"
+                break 2
+              fi
+              ;;
+          esac
+        done
+      done
+    fi
+  fi
+  for pid in $pids; do
+    name="$(cat "/proc/$pid/comm" 2>/dev/null)"
+    [ -n "$name" ] || name="未知进程"
+    # fnOS 的应用进程多半都叫 node，光报 comm 等于没说；从命令行里取应用名
+    cl="$(cmdline_of "$pid")"
+    a="$(printf '%s' "$cl" | sed -n 's#.*/var/apps/\([^/]*\)/.*#\1#p' | head -n 1)"
+    [ -n "$a" ] || a="$(printf '%s' "$cl" | sed -n 's#.*/\([^/ ]*\)/target/server/app\.js.*#\1#p' | head -n 1)"
+    [ "$a" = "fnbookshelf" ] && a="飞牛书屋"
+    [ -n "$a" ] && name="$a"
+    out="${out}${out:+, }${name}(PID ${pid})"
+  done
+  printf '%s' "$out"
+}
+
 case "$1" in
 start)
   get_env
@@ -162,8 +209,17 @@ start)
       stop_app
       sleep 1
     fi
+    # 旧进程刚退出时套接字可能还在内核里收尾，给它最多 5 秒，避免把「正在关闭」误报成「被占用」
+    _w=0
+    while port_busy && [ "$_w" -lt 10 ]; do
+      sleep 0.5
+      _w=$((_w + 1))
+    done
     if port_busy; then
-      write_err "端口 $PORT 已被其它程序占用（不是飞牛书屋的进程）。当前端口来源：$PORT_SRC。请结束占用该端口的程序，或在应用设置里更换端口后重试；若你已改过端口、这里提示的仍是旧端口号，说明新端口没写进配置文件，请检查 $ETC_DIR 的写权限后在应用设置里重新保存一次。"
+      HOLDER="$(port_holder)"
+      [ -n "$HOLDER" ] || HOLDER="无法识别占用进程（可能是系统进程，或当前用户无权查看）"
+      write_err "端口 $PORT 已被占用：$HOLDER。当前端口来源：$PORT_SRC。请结束该程序，或在应用设置里换成别的空闲端口；若你已改过端口、这里提示的仍是旧端口号，说明新端口没写进配置文件，请检查 $ETC_DIR 的写权限后在应用设置里重新保存一次。"
+      echo "[cmd/main] $(date '+%F %T') 端口占用诊断：port=$PORT holder=$HOLDER src=$PORT_SRC conf=$ETC_DIR/config.env" >> "$LOG_FILE" 2>/dev/null
       exit 1
     fi
   fi
@@ -195,6 +251,11 @@ start)
       exit 1
     fi
     if port_open; then
+      # 1.9.6：fnOS 不再做端口预检（checkport=false），桌面图标仍按 service_port=8096 打开，
+      # 用了自定义端口的用户必须知道要用新地址访问，否则会以为「装好了打不开」。
+      if [ "$PORT" != "8096" ]; then
+        echo "[cmd/main] $(date '+%F %T') 已在自定义端口 $PORT 启动；桌面图标仍指向 8096，请用 http://<NAS地址>:$PORT 访问" >> "$LOG_FILE" 2>/dev/null
+      fi
       exit 0
     fi
     sleep 0.5

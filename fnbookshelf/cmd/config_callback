@@ -12,8 +12,14 @@ APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ETC_DIR="${TRIM_PKGETC:-$APP_ROOT/etc}"
 LOGF="${TRIM_TEMP_LOGFILE:-/dev/null}"
 
-case "${wizard_port:-}" in
-  ''|*[!0-9]*) ;;   # 未传端口或非纯数字（表单本有 ^[0-9]+$ 校验，这里兜底）：不动配置
+WIZ_PORT="${wizard_port:-${port:-${WIZARD_PORT:-}}}"
+
+case "$WIZ_PORT" in
+  ''|*[!0-9]*)
+    # 1.9.6：以前这里静默跳过，用户改了端口却看不到任何反馈，只能反复撞「端口被占用」。
+    # 现在把「没收到端口值」也写进安装日志，一眼能分清是表单没传值还是写入失败。
+    echo "未收到有效的端口值（wizard_port=${wizard_port:-空}），配置未修改，应用仍按原端口启动。若表单里确实填了端口，请卸载后重装本应用再试。" > "$LOGF"
+    ;;
   *)
     CONF="$ETC_DIR/config.env"
     TMP="${CONF}.tmp.$$"
@@ -27,9 +33,9 @@ case "${wizard_port:-}" in
       else
         : 2>/dev/null > "$TMP"
       fi
-      echo "APP_PORT=$wizard_port" 2>/dev/null >> "$TMP"
+      echo "APP_PORT=$WIZ_PORT" 2>/dev/null >> "$TMP"
       if mv -f "$TMP" "$CONF" 2>/dev/null; then
-        echo "端口已更新为 $wizard_port（写入 $CONF）" > "$LOGF"
+        echo "端口已更新为 $WIZ_PORT（写入 $CONF）" > "$LOGF"
       else
         rm -f "$TMP" 2>/dev/null
         echo "端口写入失败：$CONF 所在目录不可写（$ETC_DIR），应用将按旧端口启动。请在 fnOS「设置 → 应用 → 授权管理」检查本应用的配置目录权限后，再到应用设置里重新保存端口。" > "$LOGF"

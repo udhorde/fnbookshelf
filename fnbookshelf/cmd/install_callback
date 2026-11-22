@@ -30,19 +30,34 @@ CONF
   fi
 fi
 
-# 桌面入口端口：ui/config 里必须落成「具体数字」。
-# 1.9.8 修复「装完桌面一直没有图标」：早期版本这里写的是 ${wizard_port}，
-# 只有较新的 fnOS 会替换该变量；本地安装 / 旧版系统不解析，变量原样留在入口里，
-# 系统拿到非数字的 port 就判定这个入口无效，桌面干脆不生成图标（与 checkport 无关）。
-UI_CONF="$APP_ROOT/ui/config"
-if [ -f "$UI_CONF" ] && [ -n "$PORT" ]; then
+# 桌面入口的落盘位置（1.9.9：这才是「装完一直没有图标」的真根因）
+# fnOS 只认「应用目标目录」里的 ui/，也就是 $APP_ROOT/target/ui → /vol1/@appcenter/<app>/ui；
+# 安装包根目录的 ui/ 在安装阶段会被系统处理掉，也不会被复制进 target。1.9.6~1.9.8 一直在
+# 改根目录那份，所以图标始终不出现。现在打包时把 ui/ 放进 app.tgz，这里再兜底重建一次。
+UI_DIR="$APP_ROOT/target/ui"
+UI_CONF="$UI_DIR/config"
+fnb_ensure_ui() {
+  [ -d "$UI_DIR/images" ] || mkdir -p "$UI_DIR/images" 2>/dev/null || return 1
+  [ -s "$UI_DIR/images/icon_64.png" ]  || cp -f "$APP_ROOT/ICON.PNG"     "$UI_DIR/images/icon_64.png"  2>/dev/null
+  [ -s "$UI_DIR/images/icon_256.png" ] || cp -f "$APP_ROOT/ICON_256.PNG" "$UI_DIR/images/icon_256.png" 2>/dev/null
+  [ -s "$UI_CONF" ] && return 0
+  cat > "$UI_CONF" 2>/dev/null <<JSON
+{".url":{"fnbookshelf.Application":{"title":"飞牛书屋","icon":"images/icon_{0}.png","type":"url","protocol":"https","port":"$1","url":"/","allUsers":true}}}
+JSON
+}
+fnb_write_ui_port() {
+  fnb_ensure_ui "$1" || return 1
+  [ -f "$UI_CONF" ] || return 1
   _TMPUI="${UI_CONF}.tmp.$$"
-  if sed "s/\"port\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"port\": \"$PORT\"/" "$UI_CONF" > "$_TMPUI" 2>/dev/null \
-    && mv -f "$_TMPUI" "$UI_CONF" 2>/dev/null; then
-    echo "桌面入口端口已写入 $PORT（$UI_CONF）" >> "$LOGF" 2>/dev/null
+  sed "s/\"port\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"port\": \"$1\"/" "$UI_CONF" > "$_TMPUI" 2>/dev/null || { rm -f "$_TMPUI" 2>/dev/null; return 1; }
+  mv -f "$_TMPUI" "$UI_CONF" 2>/dev/null || { rm -f "$_TMPUI" 2>/dev/null; return 1; }
+  return 0
+}
+if [ -n "$PORT" ]; then
+  if fnb_write_ui_port "$PORT"; then
+    echo "桌面入口已写入端口 $PORT（$UI_CONF）" >> "$LOGF" 2>/dev/null
   else
-    rm -f "$_TMPUI" 2>/dev/null
-    echo "桌面入口端口写入失败（$UI_CONF 不可写）：桌面图标可能不出现，请手动访问 http://NAS地址:$PORT" >> "$LOGF" 2>/dev/null
+    echo "桌面入口写入失败（$UI_CONF 不可写）：桌面图标可能不出现，请手动访问 http://NAS地址:$PORT" >> "$LOGF" 2>/dev/null
   fi
 fi
 

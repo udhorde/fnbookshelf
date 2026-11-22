@@ -186,11 +186,22 @@ port_holder() {
 }
 
 # 1.9.7：把真实端口写进桌面入口（ui/config）。
-# 旧版 fnOS 不解析 ui/config 里的 ${wizard_port}（新版本才支持动态端口），
-# 端口是个字面量或空值，系统就生成不出桌面入口——现象正是「装完了没有图标 / 点了打不开」。
-# 每次启动都按真实端口重写一遍，无论系统版本都能对上。
+# 1.9.9 修正位置：桌面入口真正生效的是 $APP_ROOT/target/ui/config（/vol1/@appcenter/<app>/ui/config）。
+# 安装包根目录那份 ui/ 在安装阶段会被系统处理掉，也不会被复制进 target，前面几版改的都是它，
+# 所以「装完一直没有图标」始终没解决。这里在启动时按真实端口重建/重写 target 里的入口。
 sync_ui_port() {
-  local f="$APP_ROOT/ui/config" tmp
+  local dir="$APP_ROOT/target/ui" f tmp pair dst src
+  [ -d "$dir/images" ] || mkdir -p "$dir/images" 2>/dev/null
+  for pair in "icon_64.png:ICON.PNG" "icon_256.png:ICON_256.PNG"; do
+    dst="$dir/images/${pair%%:*}"; src="$APP_ROOT/${pair##*:}"
+    [ -s "$dst" ] || cp -f "$src" "$dst" 2>/dev/null
+  done
+  f="$dir/config"
+  if [ ! -s "$f" ]; then
+    cat > "$f" 2>/dev/null <<JSON
+{".url":{"fnbookshelf.Application":{"title":"飞牛书屋","icon":"images/icon_{0}.png","type":"url","protocol":"https","port":"$PORT","url":"/","allUsers":true}}}
+JSON
+  fi
   [ -f "$f" ] || return 0
   grep -q '"port"' "$f" 2>/dev/null || return 0
   tmp="$f.tmp.$$"

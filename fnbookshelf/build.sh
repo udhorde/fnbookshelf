@@ -6,7 +6,7 @@ BUILD="$ROOT/build"
 STAGE="$BUILD/fpk"
 TARGET="$BUILD/target"
 NODE_TAR="$ROOT/appsrc/node-runtime/node.tar.gz"
-VERSION="1.9.8"
+VERSION="1.9.9"
 
 echo "[1/5] 清理构建目录"
 rm -rf "$BUILD"
@@ -47,9 +47,13 @@ echo "[3/5] 复制应用文件"
 cp -r "$ROOT/appsrc/server" "$TARGET/server"
 cp -r "$ROOT/appsrc/www" "$TARGET/www"
 rm -rf "$TARGET/server/data" "$TARGET/server/testdata"
+# 1.9.9：桌面入口必须落在「应用目标目录」下（$APP_ROOT/target/ui → /vol1/@appcenter/<app>/ui），
+# fnOS 只认这一份。安装包根目录的 ui/ 只当打包源，安装阶段会被系统处理掉、也不会被复制进 target，
+# 这就是 1.9.6~1.9.8「装完一直没有图标」的原因。所以把 ui/ 也塞进 app.tgz。
+cp -r "$ROOT/ui" "$TARGET/ui"
 
 echo "[4/5] 生成 app.tgz 与包结构"
-tar -czf "$STAGE/app.tgz" -C "$TARGET" server www node
+tar -czf "$STAGE/app.tgz" -C "$TARGET" server www ui node
 
 # 断链自检（针对最终产物）：本应用不需要任何符号链接。Node 官方包里的 bin/{npm,npx,
 # corepack} 都指向 lib/node_modules，精简后必须一并去掉，否则 fnOS 安装阶段递归 chown /

@@ -35,8 +35,18 @@ case "$WIZ_PORT" in
       fi
       echo "APP_PORT=$WIZ_PORT" 2>/dev/null >> "$TMP"
       if mv -f "$TMP" "$CONF" 2>/dev/null; then
-        # 桌面入口同步（1.9.8）：入口里必须是具体数字端口，否则系统判定入口无效、桌面不出现图标
-        UI_CONF="$APP_ROOT/ui/config"
+        # 桌面入口同步（1.9.9）：真正生效的是 target/ui/config（/vol1/@appcenter/<app>/ui/config），
+        # 不是安装包根目录那份。入口里必须是具体数字端口，否则系统判定入口无效、桌面不出现图标。
+        UI_DIR="$APP_ROOT/target/ui"
+        UI_CONF="$UI_DIR/config"
+        mkdir -p "$UI_DIR/images" 2>/dev/null
+        [ -s "$UI_DIR/images/icon_64.png" ]  || cp -f "$APP_ROOT/ICON.PNG"     "$UI_DIR/images/icon_64.png"  2>/dev/null
+        [ -s "$UI_DIR/images/icon_256.png" ] || cp -f "$APP_ROOT/ICON_256.PNG" "$UI_DIR/images/icon_256.png" 2>/dev/null
+        if [ ! -s "$UI_CONF" ]; then
+          cat > "$UI_CONF" 2>/dev/null <<JSON
+{".url":{"fnbookshelf.Application":{"title":"飞牛书屋","icon":"images/icon_{0}.png","type":"url","protocol":"https","port":"$WIZ_PORT","url":"/","allUsers":true}}}
+JSON
+        fi
         if [ -f "$UI_CONF" ]; then
           _TMPUI="${UI_CONF}.tmp.$$"
           if sed "s/\"port\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"port\": \"$WIZ_PORT\"/" "$UI_CONF" > "$_TMPUI" 2>/dev/null \

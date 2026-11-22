@@ -35,7 +35,20 @@ case "$WIZ_PORT" in
       fi
       echo "APP_PORT=$WIZ_PORT" 2>/dev/null >> "$TMP"
       if mv -f "$TMP" "$CONF" 2>/dev/null; then
-        echo "端口已更新为 $WIZ_PORT（写入 $CONF）" > "$LOGF"
+        # 桌面入口同步（1.9.8）：入口里必须是具体数字端口，否则系统判定入口无效、桌面不出现图标
+        UI_CONF="$APP_ROOT/ui/config"
+        if [ -f "$UI_CONF" ]; then
+          _TMPUI="${UI_CONF}.tmp.$$"
+          if sed "s/\"port\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"port\": \"$WIZ_PORT\"/" "$UI_CONF" > "$_TMPUI" 2>/dev/null \
+            && mv -f "$_TMPUI" "$UI_CONF" 2>/dev/null; then
+            echo "端口已更新为 $WIZ_PORT（写入 $CONF，桌面入口已同步）" > "$LOGF"
+          else
+            rm -f "$_TMPUI" 2>/dev/null
+            echo "端口已更新为 $WIZ_PORT（写入 $CONF），但桌面入口端口没能同步（$UI_CONF 不可写）。若桌面图标打不开，请手动访问 http://NAS地址:$WIZ_PORT 。" > "$LOGF"
+          fi
+        else
+          echo "端口已更新为 $WIZ_PORT（写入 $CONF）" > "$LOGF"
+        fi
       else
         rm -f "$TMP" 2>/dev/null
         echo "端口写入失败：$CONF 所在目录不可写（$ETC_DIR），应用将按旧端口启动。请在 fnOS「设置 → 应用 → 授权管理」检查本应用的配置目录权限后，再到应用设置里重新保存端口。" > "$LOGF"

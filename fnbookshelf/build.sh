@@ -6,7 +6,7 @@ BUILD="$ROOT/build"
 STAGE="$BUILD/fpk"
 TARGET="$BUILD/target"
 NODE_TAR="$ROOT/appsrc/node-runtime/node.tar.gz"
-VERSION="1.9.7"
+VERSION="1.9.8"
 
 echo "[1/5] 清理构建目录"
 rm -rf "$BUILD"

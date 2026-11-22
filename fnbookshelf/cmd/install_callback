@@ -30,6 +30,22 @@ CONF
   fi
 fi
 
+# 桌面入口端口：ui/config 里必须落成「具体数字」。
+# 1.9.8 修复「装完桌面一直没有图标」：早期版本这里写的是 ${wizard_port}，
+# 只有较新的 fnOS 会替换该变量；本地安装 / 旧版系统不解析，变量原样留在入口里，
+# 系统拿到非数字的 port 就判定这个入口无效，桌面干脆不生成图标（与 checkport 无关）。
+UI_CONF="$APP_ROOT/ui/config"
+if [ -f "$UI_CONF" ] && [ -n "$PORT" ]; then
+  _TMPUI="${UI_CONF}.tmp.$$"
+  if sed "s/\"port\"[[:space:]]*:[[:space:]]*\"[^\"]*\"/\"port\": \"$PORT\"/" "$UI_CONF" > "$_TMPUI" 2>/dev/null \
+    && mv -f "$_TMPUI" "$UI_CONF" 2>/dev/null; then
+    echo "桌面入口端口已写入 $PORT（$UI_CONF）" >> "$LOGF" 2>/dev/null
+  else
+    rm -f "$_TMPUI" 2>/dev/null
+    echo "桌面入口端口写入失败（$UI_CONF 不可写）：桌面图标可能不出现，请手动访问 http://NAS地址:$PORT" >> "$LOGF" 2>/dev/null
+  fi
+fi
+
 # Node 可执行权限（tar 打包可能丢失执行位）
 chmod -R +x "$APP_ROOT/target/node/bin" 2>/dev/null || true
 

@@ -6,6 +6,8 @@
         "type": "text",
         "field": "wizard_port",
         "label": "访问端口",
+        "initValue": "8096",
+        "description": "默认 8096。若该端口被其它程序占用，应用会自动顺延到附近的空闲端口（安装日志里会写明实际端口）；想固定端口就在这里填一个空闲的。改完应用会自动重启，桌面图标会跟随新端口。",
         "rules": [
           { "required": true, "message": "请输入端口号" },
           { "pattern": "^[0-9]+$", "message": "端口号必须是数字" }

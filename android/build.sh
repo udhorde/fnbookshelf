@@ -18,8 +18,8 @@ D8="$BT/d8.bat"
 ZIPALIGN="$BT/zipalign.exe"
 APKSIGNER="$BT/apksigner.bat"
 
-VERSION="1.9.6"
-VCODE="10906"
+VERSION="1.9.7"
+VCODE="10907"
 KS="$ROOT/keystore/fnb.jks"
 # 签名口令不入库：优先环境变量 FNB_KS_PASS，其次本地 keystore/.kspass（同样被 gitignore），都没有就现生成一个
 KS_PASS_FILE="$ROOT/keystore/.kspass"

@@ -1,4 +1,4 @@
-// 在线刮削：全部为国内数据源（豆瓣读书 / ISBN 直达 / 当当 / 国家图书馆 / 读秀）
+// 在线刮削：全部为国内数据源（豆瓣读书 / ISBN 直达 / 当当 / SaltyLeo 的书架）
 // 说明：应用整体离线可用，本模块仅在管理员显式开启刮削时访问外网。
 // 1.5.0 起按用户要求移除 Google Books 与 Open Library，国内源优先。
 'use strict';
@@ -11,12 +11,14 @@ const http = require('http');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
 
 // 1.9.0：按用户要求移除「国家图书馆 OPAC」与「读秀」——家庭宽带基本不可达，
-// 只会让每本书白白等 6 秒超时。现在只剩豆瓣 / ISBN 直达 / 当当三个源。
-// 优先级即数组顺序：豆瓣 > ISBN 直达 > 当当
+// 只会让每本书白白等 6 秒超时。
+// 1.9.10：新增「SaltyLeo 的书架」（tstrs.me），藏书目录型数据源，带 JSON-LD 结构化条目。
+// 优先级即数组顺序：豆瓣 > ISBN 直达 > 当当 > SaltyLeo
 const PROVIDERS = {
   douban: { id: 'douban', name: '豆瓣读书', region: 'cn', order: 1 },
   isbn: { id: 'isbn', name: 'ISBN 直达（豆瓣条目）', region: 'cn', order: 2 },
-  dangdang: { id: 'dangdang', name: '当当图书', region: 'cn', order: 3 }
+  dangdang: { id: 'dangdang', name: '当当图书', region: 'cn', order: 3 },
+  tstrs: { id: 'tstrs', name: 'SaltyLeo 的书架', region: 'cn', order: 4 }
 };
 
 // 不可达的源在 30 分钟内直接跳过，避免每本书都白等 6 秒
@@ -314,7 +316,131 @@ async function isbnDirect(keyword, query, opts) {
   return [d];
 }
 
-const RUNNERS = { douban, isbn: isbnDirect, dangdang };
+// ---------------- SaltyLeo 的书架（tstrs.me） ----------------
+// 结构：搜索页 `/search/<关键词>[?scope=title|author|press|isbn]`（不带 query 参数会 302 到该形式），
+//       条目页 `/b/<slug>`，页面内嵌 schema.org 的 Book JSON-LD，书名/作者/出版社/ISBN/页数/简介都齐。
+// 封面在 la-img.tstrs.me，需要带 Referer。
+const TSTRS = 'https://tstrs.me';
+const TSTRS_HEADERS = { 'Referer': TSTRS + '/', 'Accept': 'text/html,*/*' };
+
+/** 解析一条搜索结果行（标题/作者/出版社·年份/封面/详情链接） */
+function tstrsParseRows(html) {
+  const out = [];
+  // 以每个条目链接为切分点，逐块取字段（DOM 改动时最多丢字段，不会整页解析崩）
+  const blocks = String(html || '').split(/<a[^>]+class="search-row/).slice(1);
+  for (const b of blocks) {
+    if (out.length >= 12) break;
+    const href = (b.match(/href="([^"]+)"/) || [])[1] || '';
+    if (!/^\/b\//.test(href)) continue;
+    const pick = re => {
+      const m = b.match(re);
+      return m ? stripTags(m[1]) : '';
+    };
+    const title = pick(/<span class="search-row-title"[^>]*>([\s\S]*?)<\/span>/);
+    if (!title) continue;
+    const author = pick(/<span class="search-row-author"[^>]*>([\s\S]*?)<\/span>/)
+      .replace(/\s*\/\s*/g, '/');
+    const pressRaw = pick(/<span class="search-row-press"[^>]*>([\s\S]*?)<\/span>/);
+    const pm = pressRaw.match(/^(.*?)\s*·\s*(\d{4})$/);
+    const coverUrl = (b.match(/data-cover-src="([^"]+)"/) || [])[1] || '';
+    out.push({
+      provider: 'tstrs', title, author,
+      publisher: pm ? pm[1].trim() : pressRaw,
+      date: pm ? pm[2] : '',
+      coverUrl: /^https?:/.test(coverUrl) ? coverUrl : '',
+      url: TSTRS + href,
+      description: pick(/<span class="search-row-summary"[^>]*>([\s\S]*?)<\/span>/).slice(0, 400)
+    });
+  }
+  return out;
+}
+
+async function tstrsSearch(keyword, opts) {
+  const kw = String(keyword || '').trim();
+  if (!kw) return [];
+  const seen = new Set();
+  const collect = (html) => {
+    const out = [];
+    for (const it of tstrsParseRows(html)) {
+      if (seen.has(it.url)) continue;
+      seen.add(it.url);
+      out.push(it);
+    }
+    return out;
+  };
+  // ISBN 走 scope=isbn，比按书名搜准得多；命中就不再按书名搜
+  const isbn = cleanIsbn(kw);
+  if (isbn) {
+    const html = await getText(`${TSTRS}/search/${encodeURIComponent(isbn)}?scope=isbn`,
+      { headers: TSTRS_HEADERS, timeout: opts.timeout });
+    const list = html ? collect(html) : [];
+    if (list.length) return list;
+  }
+  const html = await getText(`${TSTRS}/search/${encodeURIComponent(kw)}`,
+    { headers: TSTRS_HEADERS, timeout: opts.timeout });
+  return html ? collect(html) : [];
+}
+
+async function tstrsDetail(item, opts) {
+  if (!item || !item.url) return null;
+  const html = await getText(item.url, { headers: TSTRS_HEADERS, timeout: opts.timeout });
+  if (!html) return null;
+  const out = { provider: 'tstrs', url: item.url, coverUrl: item.coverUrl || '' };
+  let ld = null;
+  const blocks = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g) || [];
+  for (const blk of blocks) {
+    const raw = blk.replace(/^<script[^>]*>/, '').replace(/<\/script>$/, '').trim();
+    try {
+      const j = JSON.parse(raw);
+      const arr = Array.isArray(j) ? j : [j];
+      const bk = arr.find(x => x && String(x['@type'] || '') === 'Book');
+      if (bk) { ld = bk; break; }
+    } catch (_) {}
+  }
+  if (ld) {
+    out.title = stripTags(ld.name || ld.alternateName || '');
+    if (!out.title && ld.alternateName) out.title = stripTags(ld.alternateName);
+    const au = ld.author;
+    if (Array.isArray(au)) out.author = au.map(a => (a && typeof a === 'object' ? a.name : a)).filter(Boolean).join('/');
+    else if (au) out.author = typeof au === 'object' ? (au.name || '') : String(au);
+    if (ld.publisher) out.publisher = typeof ld.publisher === 'object' ? (ld.publisher.name || '') : String(ld.publisher);
+    if (ld.datePublished) out.date = String(ld.datePublished).slice(0, 10);
+    if (ld.isbn) out.isbn = String(ld.isbn).replace(/[^\dXx]/g, '');
+    if (ld.numberOfPages) out.pages = Number(ld.numberOfPages) || 0;
+    if (ld.image) out.coverUrl = typeof ld.image === 'string' ? ld.image : ((ld.image && ld.image.url) || out.coverUrl);
+    if (ld.description) out.description = stripTags(ld.description).slice(0, 1600);
+    // 分类页名（如「精品小说」）当标签，仅内部留存，不写库
+    if (ld.genre) out.tags = [].concat(ld.genre).map(t => stripTags(t)).filter(Boolean).slice(0, 6);
+    if (ld.bookFormat) out.binding = stripTags(ld.bookFormat);
+  }
+  // JSON-LD 缺失时退回搜索结果字段，至少把书名/作者补上
+  out.title = out.title || item.title || '';
+  out.author = out.author || item.author || '';
+  out.publisher = out.publisher || item.publisher || '';
+  out.date = out.date || item.date || '';
+  if (!out.description) out.description = item.description || '';
+  if (!out.coverUrl) out.coverUrl = item.coverUrl || '';
+  return out.title ? out : null;
+}
+
+async function tstrs(keyword, query, opts) {
+  const cands = await tstrsSearch(keyword, opts);
+  if (!cands.length) return [];
+  for (const c of cands) c._s = score(c, query);
+  cands.sort((a, b) => b._s - a._s);
+  const out = [];
+  for (const c of cands.slice(0, 3)) {
+    if (opts.deadline && Date.now() > opts.deadline) break;
+    const d = await tstrsDetail(c, opts);
+    if (!d) continue;
+    d.score = score(d, query);
+    out.push(d);
+    if (d.score > 0.9) break;
+  }
+  return out;
+}
+
+const RUNNERS = { douban, isbn: isbnDirect, dangdang, tstrs };
 
 /** 目录名里挑一个可以当检索词的（文件名没信息量时它就是书名线索） */
 function pickDirKeyword(query) {
@@ -352,6 +478,8 @@ async function scrapeBook(query, providers, opts) {
     passes.push(primary);
     if (dirKw) passes.push(dirKw);       // 书名搜不到时退一步用目录名
   }
+  // 只有 ISBN、没有任何书名线索时，直接用 ISBN 当检索词（SaltyLeo 支持 scope=isbn）
+  if (!passes.length && cleanIsbn(query.isbn)) passes.push(cleanIsbn(query.isbn));
   try {
   for (let pi = 0; pi < passes.length; pi++) {
     const kw = passes[pi];
@@ -406,9 +534,11 @@ function isAcceptable(best, query) {
 // ---------------- 封面下载 ----------------
 async function downloadCover(url, coversDir, bookId, timeout, opts) {
   if (!url) return null;
+  // 各家图床的防盗链域名不同：SaltyLeo 的图在 la-img.tstrs.me，Referer 必须是 tstrs.me
+  const referer = /tstrs\.me/.test(String(url)) ? 'https://tstrs.me/' : 'https://book.douban.com/';
   const r = await request(url, Object.assign({
     timeout: timeout || 15000,
-    headers: { 'Referer': 'https://book.douban.com/', 'Accept': 'image/*,*/*' }
+    headers: { 'Referer': referer, 'Accept': 'image/*,*/*' }
   }, opts || {}));
   if (!r || r.status !== 200 || !r.body || r.body.length < 800) return null;
   const buf = r.body;

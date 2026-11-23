@@ -1850,7 +1850,7 @@ async function renderDetail(app, id) {
     }
     if (x.isbn) metaBox.append(el('div', { class: 'meta-row' }, 'ISBN：', el('b', {}, x.isbn)));
     if (x.scrapeInfo) {
-      const names = { douban: '豆瓣读书', isbn: 'ISBN 直达', dangdang: '当当图书' };
+      const names = { douban: '豆瓣读书', isbn: 'ISBN 直达', dangdang: '当当图书', tstrs: 'SaltyLeo 的书架' };
       metaBox.append(el('div', { class: 'meta-row' }, '刮削：',
         el('b', {}, names[x.scrapeInfo.provider] || x.scrapeInfo.provider || '—'),
         ` · 匹配度 ${Math.round((x.scrapeInfo.score || 0) * 100)}%`,
@@ -2331,7 +2331,7 @@ async function renderDetail(app, id) {
         return;
       }
       const c = r.candidate;
-      const names = { douban: '豆瓣读书', isbn: 'ISBN 直达', nlc: '国家图书馆', duxiu: '读秀', dangdang: '当当图书' };
+      const names = { douban: '豆瓣读书', isbn: 'ISBN 直达', nlc: '国家图书馆', duxiu: '读秀', dangdang: '当当图书', tstrs: 'SaltyLeo 的书架' };
       const msg = `来源：${names[r.provider] || r.provider}\n匹配度：${Math.round((r.score || 0) * 100)}%${r.refined ? '（已抽样前 10 页重刮）' : ''}\n\n书名：${c.title}\n作者：${c.author || '—'}\n出版社：${c.publisher || '—'}\n出版年：${c.date || '—'}\nISBN：${c.isbn || '—'}\n简介：${(c.description || '—').slice(0, 120)}…\n\n采用此结果？`;
       if (!confirm(msg)) return;
       await api(`/books/${book.id}/rescrape`, { method: 'POST', body: JSON.stringify({ apply: c }) });
@@ -2765,6 +2765,7 @@ async function renderAdmin(app) {
       douban: '图书条目：书名/作者/ISBN/评分/封面（首选）',
       isbn: '用 ISBN 直接命中豆瓣条目，准确率最高',
       dangdang: '当当图书商品页（含出版信息）',
+      tstrs: 'SaltyLeo 的书架：藏书目录，含简介/ISBN/封面（补充源）',
       nlc: '国家图书馆 OPAC（实验：多数家庭网络不可达）',
       duxiu: '读秀（实验：需机构账号或校园网）'
     };

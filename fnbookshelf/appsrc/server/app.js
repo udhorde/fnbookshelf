@@ -44,7 +44,7 @@ const scanner = new Scanner(store);
 
 // ---- 日志 / 崩溃取证 ----
 const log = logger.init(DATA_DIR);
-log.version = '1.9.9';
+log.version = '1.9.10';
 log.setContext('启动');
 log.detectAbnormalExit();   // 上次是被 OOM / SIGKILL / 断电杀掉的？写进崩溃记录
 log.install(store);         // uncaughtException / unhandledRejection / 事件循环阻塞监控

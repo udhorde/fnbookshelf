@@ -75,7 +75,7 @@ class Store {
         https: { mode: 'self', cert: '', key: '' },
         // 刮削：providers 按优先级排序，refine=刮不到时抽样前 10 页重刮
         // 刮削：国内源优先（豆瓣 > 国图 > 读秀 > ISBN 直达 > 当当）；experimental 源默认不启用
-        scrape: { enabled: false, provider: 'douban', providers: ['douban', 'isbn', 'dangdang'], refine: true, timeout: 12000, cover: true },
+        scrape: { enabled: false, provider: 'douban', providers: ['douban', 'isbn', 'dangdang', 'tstrs'], refine: true, timeout: 12000, cover: true },
         // TTS：browser=浏览器本地语音（离线）｜openai/azure=兼容接口；enabled=false 时全站关闭朗读
         tts: {
           enabled: true, engine: 'browser', rate: 1, autoNext: true,
@@ -140,13 +140,16 @@ class Store {
     d.settings.scrape = Object.assign({}, empty.settings.scrape, d.settings.scrape || {});
     // 1.5.0：移除境外源（google / openlibrary），只保留国内源
     // 1.9.0：按用户要求去掉「国家图书馆」与「读秀」（家庭网络基本不可达，白等超时）
-    const KNOWN_SOURCES = ['douban', 'isbn', 'dangdang'];
+    // 1.9.10：新增 SaltyLeo 的书架（tstrs.me），排在最后当补充源
+    const KNOWN_SOURCES = ['douban', 'isbn', 'dangdang', 'tstrs'];
     if (Array.isArray(d.settings.scrape.providers)) {
       d.settings.scrape.providers = d.settings.scrape.providers.filter(p => KNOWN_SOURCES.includes(p));
     }
     if (!Array.isArray(d.settings.scrape.providers) || !d.settings.scrape.providers.length) {
-      d.settings.scrape.providers = ['douban', 'isbn', 'dangdang'];
+      d.settings.scrape.providers = ['douban', 'isbn', 'dangdang', 'tstrs'];
     }
+    // 老配置自动补上新源（排在最后，只在前面几个源都没结果时才会用到）
+    if (!d.settings.scrape.providers.includes('tstrs')) d.settings.scrape.providers.push('tstrs');
     if (d.settings.scrape.provider && !KNOWN_SOURCES.includes(d.settings.scrape.provider)) {
       d.settings.scrape.provider = d.settings.scrape.providers[0];
     }

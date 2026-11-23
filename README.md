@@ -1,36 +1,70 @@
 # 飞牛书屋（fnbookshelf）
 
-跑在飞牛 fnOS 上的自托管电子书阅读应用：把 NAS 上的电子书变成一个能搜、能读、能整理的书架。
+把 NAS 上的电子书变成一个能搜、能读、能整理的书架。你只需要添加一个目录，它自己扫描、自己刮削、自己出封面；之后在电脑浏览器、手机、电视上都能接着读，每个账号各记各的进度。
 
-- **服务端 / Web**：fnOS `.fpk` 应用包，Express + 原生 JS，无前端构建步骤
+**它不接管你的文件，只在你原来的目录上建一层索引。**
+
+- **服务端 / Web**：飞牛 fnOS 原生应用（`.fpk`，不需要 Docker），Express + 原生 JS，无前端构建步骤
 - **客户端**：Android 手机版 / TV 版（aapt2 + javac + d8，不依赖 Gradle）
+- **系统要求**：fnOS 0.9.0 及以上，x86_64
 
-当前版本 **1.9.10**。
+当前版本 **1.9.10** ｜ [下载安装包](https://github.com/udhorde/fnbookshelf/releases) ｜ [飞牛论坛说明帖](https://club.fnnas.com/forum.php?mod=viewthread&tid=77113)
 
-## 目录结构
+## 界面
 
-```
-fnbookshelf/                 fnOS 应用（.fpk）
-├── manifest                 应用元信息（fnOS 按「键=值」逐行解析，每行只能有一个 =）
-├── build.sh                 打包：内嵌 Node 运行时 + server/ + www/ → fnbookshelf_<ver>_x86.fpk
-├── appsrc/
-│   ├── server/              服务端
-│   │   ├── app.js           HTTP 入口、路由挂载、BASE_PATH 二级路径
-│   │   ├── routes/          API 路由
-│   │   └── lib/             store / scanner / taxonomy / scheduler / booksearch …
-│   └── www/                 前端（原生 JS，无打包）
-│       ├── js/app.js        书库、详情、筛选、专题、版本管理
-│       ├── js/reader.js     阅读器（EPUB / PDF / MOBI / TXT / DOCX / PPT）
-│       └── vendor/          epub.js / pdf.js / foliate / webppt
-├── cmd/  config/  ui/  wizard/   fnOS 应用生命周期脚本与桌面入口
+| 书库（全部图书） | 阅读器 |
+|---|---|
+| <img src="docs/screenshots/01-library.png" width="420"> | <img src="docs/screenshots/02-reader.png" width="420"> |
+| **阅读统计** | **管理后台** |
+| <img src="docs/screenshots/03-stats.png" width="420"> | <img src="docs/screenshots/04-admin.png" width="420"> |
 
-android/                     Android 客户端
-├── build.sh                 aapt2 + javac + d8 + apksigner
-├── AndroidManifest-phone.xml / -tv.xml
-├── src/core|phone|tv/       Java 源码
-├── assets-common/           fnb-common.js（下载交给原生）
-└── assets-tv/               tv-nav.js（遥控器空间导航）
-```
+## 四个特色
+
+### 一、一个文件都不挪
+
+这条是设计底线，也是最容易被同类工具破坏的地方。
+
+- 扫描**只读**：不复制、不移动、不改文件名、不写回元数据。封面、缓存、阅读进度、书单全部落在应用自己的数据目录里。
+- 同名、同系列多卷（`XX 卷1/卷2/卷3`、`上中下`、`Vol.3`）在书库里自动合并成「一部作品」，**只是索引层面的合并**——磁盘上还是原来那几个文件，位置一个字节没动。
+- 想换版本在详情页直接切，打开的还是磁盘上那个文件，不是副本。
+- 只有你主动删书，文件才会移进回收站（保留 30 天，可还原）。
+- 反过来也成立：在文件管理器里新增、改名、挪目录，回后台点一次扫描就对齐，不会有「导入后再也找不到原文件」的窘境。
+
+<img src="docs/screenshots/10-book-detail.png" width="860">
+
+### 二、手机 + TV 两个 APP，可在电视上看绘本
+
+不是套壳网页就完事，两端都做了针对性的原生处理。
+
+- **手机 / 平板**：跟随系统旋转、分屏可用；返回键按「网页后退 → 退到底弹设置」逐层走，不会一按就退出；下载交给系统「下载」目录；启动时自检版本，发现新版自动下载并调起安装。
+- **TV**：**支持 ppt 格式绘本**，支持一键转成 PDF，强制横屏全屏、无触摸屏声明；遥控器**方向键移动高亮框、确定键点击**，输入框按确定弹原生输入法；网页文字放大到 140%，三米外也看得清。
+
+<img src="docs/screenshots/05-ppt-to-pdf.png" width="860">
+
+### 三、AI 助手
+
+后台可添加兼容 OpenAI 的接口实现 AI 助手功能，不配置也能用（找书走本地全库索引）。
+
+- **AI 找书**：用一句描述（「讲中国近代史、偏通俗的」「和《三体》气质接近的科幻」）检索书库并给出理由；不配 AI 时也能本地命中，不耗额度。
+- **AI 解读**：书内的章节、段落、文字都可随时提问；1.9.5 起会带上当前书籍信息、所在章节与段落，扫描件/漫画这类提不出文字的页面自动改发**当前页截图**。
+- 硬性限制：只发当前页附近约 1200 字，不会上传整本书；单次超 5 秒直接回「我不知道」，不消耗每日额度。
+
+| AI 设置（管理后台） | AI 找书 |
+|---|---|
+| <img src="docs/screenshots/06-ai-settings.png" width="420"> | <img src="docs/screenshots/09-ai-find-result.png" width="420"> |
+
+<img src="docs/screenshots/07-ai-in-book.png" width="860">
+
+<img src="docs/screenshots/08-ai-find-dialog.png" width="560">
+
+### 四、自动刮削
+
+- 数据来自豆瓣读书，另有 ISBN 直达、当当、**SaltyLeo 的书架**作为补充源：书名、作者、出版社、出版年、ISBN、页数、**封面**、简介。
+- 判定顺序是**文件名 → 内嵌元数据 → 目录层级 → 正文抽样**，命中即停，不会为了一本书把整个 PDF 读一遍。
+- 刮不到封面时，自动拿 PDF 首页当封面，不留空白格。
+- 支持定时调度（每 N 小时 / N 天 / 每周几 / 每月某日，可只刮不扫），刮削失败不影响入库，事后可单本重刮、也可指定关键词重刮。
+- 有护栏：相似度不够高时不覆盖你已有的书名，同目录同名的书不会互相串号。
+
 ## 功能一览
 
 | 功能 | 说明 |
@@ -85,7 +119,7 @@ android/                     Android 客户端
 
 ## 安装步骤
 
-1. 登录飞牛 fnOS → 应用中心 → 本地安装 → 上传 `fnbookshelf_1.9.0_x86.fpk`
+1. 登录飞牛 fnOS → 应用中心 → 本地安装 → 上传 `fnbookshelf_1.9.10_x86.fpk`
 2. 安装向导中设置：**访问端口**（默认 8096）、**管理员邮箱**
 3. 安装完成后从飞牛桌面点击「飞牛书屋」图标（**在新页面打开**），或浏览器访问 `https://NAS_IP:8096`
 4. 首次访问自签名证书浏览器会提示风险，选择「继续访问」即可（也可在后台粘贴正式证书替换）
@@ -108,7 +142,7 @@ android/                     Android 客户端
 
 1. **邮箱**：后台 → 📧 邮箱 → SMTP（QQ 邮箱推荐 `smtp.qq.com:465` + 授权码）→ 发测试邮件。**SMTP 只用于发送登录验证码，不会发送系统日志**
 2. **图书路径**：后台 → 📚 图书库 → 添加 NAS 绝对路径（如 `/vol1/1000/books`）
-3. **扫描**：点「立即扫描书库」；每日 0 点会自动再扫一次（自动扫描按每轮 40 本分批，内存超过保护线会提前收尾并在下轮继续）
+3. **扫描**：点「立即扫描书库」；「扫描与刮削」里可开启**定时自动扫描**并设定周期（每 N 小时 / N 天 / 每周几 / 每月某日，可顺带自动刮削）。自动扫描按每轮 40 本分批，内存超过保护线会提前收尾并在下轮继续
 4. **刮削（可选）**：后台 → 图书库 → 开启在线刮削，勾选刮削源（默认 豆瓣 → ISBN → 当当 → SaltyLeo 的书架；不可达的源会自动冷却 30 分钟）。扫描不依赖刮削，随时可关
 5. **TTS（可选）**：后台 → 🔊 语音朗读 → 默认浏览器本地语音即可；也可整体关闭
 6. **AI（可选）**：后台 → ✦ AI 设置 → 填接口地址/Key/模型与每日次数后启用
@@ -141,6 +175,35 @@ android/                     Android 客户端
 
 如需把数据放到别的存储卷，在后台「💾 数据位置」查看当前路径，或把 `var/data` 迁到目标盘并在 `etc/data_dir` 写入绝对路径后重启应用。
 
+## 目录结构
+
+```
+fnbookshelf/                 fnOS 应用（.fpk）
+├── manifest                 应用元信息（fnOS 按「键=值」逐行解析，每行只能有一个 =）
+├── build.sh                 打包：内嵌 Node 运行时 + server/ + www/ → fnbookshelf_<ver>_x86.fpk
+├── appsrc/
+│   ├── server/              服务端
+│   │   ├── app.js           HTTP 入口、路由挂载、BASE_PATH 二级路径
+│   │   ├── routes/          API 路由
+│   │   └── lib/             store / scanner / taxonomy / scheduler / booksearch …
+│   └── www/                 前端（原生 JS，无打包）
+│       ├── js/app.js        书库、详情、筛选、专题、版本管理
+│       ├── js/reader.js     阅读器（EPUB / PDF / MOBI / TXT / DOCX / PPT）
+│       └── vendor/          epub.js / pdf.js / foliate / webppt
+├── cmd/  config/  ui/  wizard/   fnOS 应用生命周期脚本与桌面入口
+
+android/                     Android 客户端
+├── build.sh                 aapt2 + javac + d8 + apksigner
+├── AndroidManifest-phone.xml / -tv.xml
+├── src/core|phone|tv/       Java 源码
+├── assets-common/           fnb-common.js（下载交给原生）
+└── assets-tv/               tv-nav.js（遥控器空间导航）
+
+docs/screenshots/            README 里的界面截图（公开仓用，已隐去个人路径）
+mkepub.js / mkpdf.js / mkppt.js   造测试样本的脚本（见「开发者工具」）
+testlib/                     脚本生成的样本文件（gitignore，不入库）
+```
+
 ## 技术架构
 
 - 后端：Node.js 22（打包内置）+ Express，依赖仅 express / nodemailer / fast-xml-parser（ZIP 解析改为内置 `zipread.js`，不再整本载入）；数据为 JSON 文件（原子写入）
@@ -153,30 +216,44 @@ android/                     Android 客户端
 - 日志：`logger.js` 批量异步追加按天日志 + 崩溃取证，`scheduler.js` 本地 0 点扫描，`safeio.js` 大文件护栏
 - 安全：HMAC 令牌（24 小时，可吊销 / 可全设备失效）、验证码 10 分钟过期、重发限频、防路径穿越、管理接口双重鉴权；查询串令牌仅限只读资源，`/api/*` 一律 `Cache-Control: no-store`
 
-
 ## 构建
 
 **服务端 / fpk**（需 Node 22 与 fnOS 打包环境变量，见 `build.sh` 头部）：
 
 ```bash
 cd fnbookshelf && bash build.sh
-# → fnbookshelf_1.9.3_x86.fpk
+# → fnbookshelf_<ver>_x86.fpk
 ```
 
 **Android**（需 `android/tools/` 下的 JDK17 + build-tools;34 + platforms;android-34，见 `android/README.md`）：
 
 ```bash
 cd android && bash build.sh
-# → out/fnbookshelf-android-{phone,tv}-1.9.3.apk
+# → out/fnbookshelf-android-{phone,tv}-<ver>.apk
 ```
 
 签名密钥放在 `android/keystore/fnb.jks`（**不入库**）。首次构建若缺失，`build.sh` 会自动生成一把自签名密钥——但这意味着**升级覆盖安装会因签名不同而失败**，请自行备份并在多台机器之间复用同一把。
 
+## 开发者工具
+
+根目录下三个脚本用来**造测试样本**，与运行、打包都无关，只在本地手工验证阅读器时需要：
+
+| 脚本 | 产物 | 验证什么 |
+|---|---|---|
+| `mkepub.js` | `testlib/三体-刘慈欣.epub` | 结构完整（含 `toc.ncx`）的 EPUB，验证目录、分页与 CFI 定位 |
+| `mkpdf.js` | `testlib/大文件测试-500页.pdf` | 500 页长文本、未压缩，验证 Range 分块加载与渲染性能 |
+| `mkppt.js` | `testlib/产品发布会-theme.ppt` | 模拟 OLE 复合文档的旧版二进制 `.ppt`，验证 PPT 解析与转 PDF |
+
+```bash
+node mkepub.js && node mkpdf.js && node mkppt.js   # 产物落在 testlib/（已 gitignore）
+```
+
+三者都**不依赖第三方库**（EPUB 那个自带一个最小 ZIP 写入器），生成的大体积样本不入库。
+
 ## 本地调试
 
 ```bash
-PORT=8096 DATA_DIR=/path/to/data ADMIN_EMAIL=you@example.com \
-  node fnbookshelf/appsrc/server/app.js
+PORT=8096 DATA_DIR=/path/to/data ADMIN_EMAIL=you@example.com   node fnbookshelf/appsrc/server/app.js
 ```
 
 默认启用自签名 HTTPS，`curl` 需加 `-k`。首次启动会自动创建管理员账号，数据全部落在 `DATA_DIR` 下（`data.json` + `secret.key` + `logs/`）。
@@ -185,10 +262,31 @@ PORT=8096 DATA_DIR=/path/to/data ADMIN_EMAIL=you@example.com \
 
 | 版本 | 主要改动 |
 |---|---|
+| 1.9.10 | 新增刮削源「SaltyLeo 的书架」（含 ISBN 直查）；只有 ISBN 没有书名时也能刮 |
+| 1.9.9 | **桌面图标终于会出现了**：入口改到应用目标目录 `target/ui`（安装包根目录那份会被系统丢弃） |
+| 1.9.8 | 桌面入口端口不再写 `${wizard_port}` 变量，改为具体数字 |
+| 1.9.7 | 端口被占时自动顺延到空闲端口；启动时回写桌面入口 |
+| 1.9.6 | 关掉系统端口预检（`checkport=false`）；报「端口占用」时点名占用进程 |
+| 1.9.5 | AI 书内提问带上书籍/章节/段落；取不到文字时改发当前页截图 |
+| 1.9.4 | 改端口可靠写回 `config.env`（幂等重写，不再丢行/受 CRLF 影响） |
 | 1.9.3 | 阅读器退出卡死；PDF/PPT 每页底部灰底空白；多文件一次合并 |
-| 1.9.2 | 刮削书名不再串号；格式/出版社/作者筛选；APP 返回键回上一层；朗读取全文 |
-| 1.9.1 | 扫描调度；封面上传；回收站 30 天保留；顶栏吸顶 |
-| 1.9.0 | 书库整理大改；多端安装包管理；专题封面 |
-| 1.8.x | 编码自愈、大 TXT 分块、全库检索、流式落盘、专题、旧 WebView 兼容 |
+| 1.9.2 | 刮削书名不再串号；格式/出版社/作者筛选；APP 返回键回上层；朗读取全文 |
+| 1.9.1 | 扫描调度（每 N 小时/天/周/月）；封面上传；回收站 30 天；顶栏吸顶 |
+| 1.9.0 | 书库整理大改：按路径批量合并、批量版本；多端安装包管理；专题封面 |
+| 1.8.2 | 刮削依据改为文件名优先；专题；批量版本与整组打散；大库流式落盘 |
+| 1.8.1 | 先全库索引再让 AI 精选；乱码书名自愈；按目录层级刮削 |
+| 1.8.0 | 编码自动识别；大 TXT 分块；Word 在线阅读；同名/系列自动归并 |
+| 1.7.x | 安全加固：验证码、接口限流、令牌生命周期、授权粒度、路径泄露、安全响应头 |
+| 1.6.x | PPT 改为浏览器内直接渲染；旧版 `.ppt` 取图转换；安装时断链软链接修复 |
+| 1.5.0 | 扫描与刮削解耦，扫描即入库，不再等网络 |
 
-完整改动见 `fnbookshelf/README.md`。
+完整改动见 [`fnbookshelf/README.md`](fnbookshelf/README.md)。
+
+## 链接
+
+- 项目主页 / 源码：https://github.com/udhorde/fnbookshelf
+- 安装包下载：https://github.com/udhorde/fnbookshelf/releases
+- 飞牛论坛说明帖：https://club.fnnas.com/forum.php?mod=viewthread&tid=77113
+- 问题反馈：优先提 GitHub Issues；回帖请带上 fnOS 版本、CPU 架构、图书目录路径与相关日志
+
+> 声明：个人自用的开源项目，与飞牛官方无关。开发过程中有 AI 助手参与编码与文档整理，功能取舍、验证与发布由作者负责。重要数据请自行保留备份。

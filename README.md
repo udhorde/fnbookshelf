@@ -5,7 +5,7 @@
 - **服务端 / Web**：fnOS `.fpk` 应用包，Express + 原生 JS，无前端构建步骤
 - **客户端**：Android 手机版 / TV 版（aapt2 + javac + d8，不依赖 Gradle）
 
-当前版本 **1.9.3**。
+当前版本 **1.9.9**。
 
 ## 目录结构
 
